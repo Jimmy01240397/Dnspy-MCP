@@ -3,6 +3,7 @@ using dnlib.DotNet;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.Metadata;
+using ModelContextProtocol;
 
 namespace DnSpyMcp.Services;
 
@@ -67,12 +68,12 @@ public sealed class Workspace
         if (string.IsNullOrEmpty(path))
         {
             if (_current == null || !_open.TryGetValue(_current, out var cur))
-                throw new System.InvalidOperationException("no active asm_file. Open one via asm_file_open or set it via asm_file_switch.");
+                throw new McpException("no active asm_file. Open one via asm_file_open or set it via asm_file_switch.");
             return cur;
         }
         var full = System.IO.Path.GetFullPath(path);
         if (!_open.TryGetValue(full, out var a))
-            throw new System.InvalidOperationException($"asm_file not opened: {full}. Call asm_file_open first.");
+            throw new McpException($"asm_file not opened: {full}. Call asm_file_open first.");
         return a;
     }
 
@@ -82,7 +83,7 @@ public sealed class Workspace
     {
         var full = System.IO.Path.GetFullPath(path);
         if (!_open.TryGetValue(full, out var a))
-            throw new System.InvalidOperationException($"asm_file not opened: {full}. Call asm_file_open first.");
+            throw new McpException($"asm_file not opened: {full}. Call asm_file_open first.");
         _current = full;
         return a;
     }

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ModelContextProtocol;
 
 namespace DnSpyMcp.Services;
 
@@ -39,13 +40,13 @@ public sealed class AgentRegistry
         {
             string? n;
             lock (_activeLock) n = _active;
-            if (n == null) throw new InvalidOperationException("no active agent. Call live_agent_connect first.");
+            if (n == null) throw new McpException("no active agent. Call live_agent_connect first.");
             if (!_agents.TryGetValue(n, out var a))
-                throw new InvalidOperationException($"active agent '{n}' is gone (was it removed?).");
+                throw new McpException($"active agent '{n}' is gone (was it removed?).");
             return a;
         }
         if (!_agents.TryGetValue(name, out var agent))
-            throw new InvalidOperationException($"agent '{name}' is not registered. Call live_agent_connect with this name.");
+            throw new McpException($"agent '{name}' is not registered. Call live_agent_connect with this name.");
         return agent;
     }
 
@@ -76,7 +77,7 @@ public sealed class AgentRegistry
     public AgentClient Switch(string name)
     {
         if (!_agents.TryGetValue(name, out var a))
-            throw new InvalidOperationException($"agent '{name}' is not registered. Call live_agent_connect with this name first.");
+            throw new McpException($"agent '{name}' is not registered. Call live_agent_connect with this name first.");
         lock (_activeLock) _active = name;
         return a;
     }

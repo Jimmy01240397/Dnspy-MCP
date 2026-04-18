@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ModelContextProtocol;
 
 namespace DnSpyMcp.Services;
 
@@ -39,20 +40,34 @@ public sealed class AgentClient : IDisposable
         lock (_connectLock)
         {
             CloseLocked();
-            _tcp = new TcpClient();
-            _tcp.Connect(_host, _port);
-            _tcp.NoDelay = true;
-            var stream = _tcp.GetStream();
-            _reader = new StreamReader(stream, new UTF8Encoding(false));
-            _writer = new StreamWriter(stream, new UTF8Encoding(false)) { NewLine = "\n", AutoFlush = true };
-            var banner = _reader.ReadLine();
-            if (banner == null) throw new IOException("agent closed without sending banner");
-
-            if (_token != null)
+            try
             {
-                var resp = CallLocked("auth", new { token = _token });
-                if (resp["ok"]?.GetValue<bool>() != true)
-                    throw new IOException("agent auth failed: " + resp["error"]);
+                _tcp = new TcpClient();
+                _tcp.Connect(_host, _port);
+                _tcp.NoDelay = true;
+                var stream = _tcp.GetStream();
+                _reader = new StreamReader(stream, new UTF8Encoding(false));
+                _writer = new StreamWriter(stream, new UTF8Encoding(false)) { NewLine = "\n", AutoFlush = true };
+                var banner = _reader.ReadLine();
+                if (banner == null)
+                    throw new McpException($"agent at {_host}:{_port} closed the connection without sending a banner (is dnspymcpagent actually running there?)");
+
+                if (_token != null)
+                {
+                    var resp = CallLocked("auth", new { token = _token });
+                    if (resp["ok"]?.GetValue<bool>() != true)
+                        throw new McpException($"agent at {_host}:{_port} rejected auth: {resp["error"]}");
+                }
+            }
+            catch (SocketException ex)
+            {
+                CloseLocked();
+                throw new McpException($"could not reach dnspymcpagent at {_host}:{_port} — {ex.SocketErrorCode} ({ex.Message}). Start the agent with `dnspymcpagent.exe --host {_host} --port {_port} --attach <pid>` and retry.");
+            }
+            catch (IOException ex)
+            {
+                CloseLocked();
+                throw new McpException($"IO failure talking to agent at {_host}:{_port}: {ex.Message}");
             }
         }
     }
@@ -76,19 +91,27 @@ public sealed class AgentClient : IDisposable
         {
             if (_tcp == null || !_tcp.Connected)
                 Connect();
-            return CallLocked(method, @params);
+            try
+            {
+                return CallLocked(method, @params);
+            }
+            catch (IOException ex)
+            {
+                CloseLocked();
+                throw new McpException($"IO failure talking to agent at {_host}:{_port} during '{method}': {ex.Message}");
+            }
         }
     }
 
     private JsonObject CallLocked(string method, object? @params)
     {
-        if (_writer == null || _reader == null) throw new InvalidOperationException("not connected");
+        if (_writer == null || _reader == null) throw new McpException("agent client is not connected — call live_agent_connect first");
         int id = ++_nextId;
         var frame = JsonSerializer.Serialize(new { id, method, @params });
         _writer.WriteLine(frame);
-        var line = _reader.ReadLine() ?? throw new IOException("agent closed unexpectedly");
+        var line = _reader.ReadLine() ?? throw new IOException($"agent closed the connection while waiting for a response to '{method}'");
         return JsonNode.Parse(line)?.AsObject()
-               ?? throw new IOException("agent returned non-object response");
+               ?? throw new IOException($"agent returned a non-object response to '{method}': {line}");
     }
 
     /// <summary>
@@ -102,7 +125,7 @@ public sealed class AgentClient : IDisposable
         {
             var err = resp["error"]?.ToString() ?? "unknown";
             var errType = resp["errorType"]?.ToString();
-            throw new InvalidOperationException($"agent error ({method}): {err}{(errType != null ? $" [{errType}]" : "")}");
+            throw new McpException($"agent error ({method}): {err}{(errType != null ? $" [{errType}]" : "")}");
         }
         var result = resp["result"];
         // detach from parent so the caller can freely move it into a new tree
