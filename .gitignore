@@ -1,8 +1,12 @@
-# Local test target — never committed
-/dnspymcptest/
-
-# Prebuilt dnSpy / dependency DLLs — populated by scripts/bootstrap-lib.ps1
+# Prebuilt dnSpy / dependency DLLs — populated by builder.ps1
 /lib/
+
+# builder.ps1 staged output
+/dist/
+
+# pytest cache
+__pycache__/
+.pytest_cache/
 
 # Build outputs
 **/bin/

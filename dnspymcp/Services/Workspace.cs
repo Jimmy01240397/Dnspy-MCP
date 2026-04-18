@@ -25,6 +25,7 @@ public sealed class Workspace
     }
 
     private readonly ConcurrentDictionary<string, OpenedAsm> _open = new(System.StringComparer.OrdinalIgnoreCase);
+    private string? _current;
     public DecompilerSettings Settings { get; } = new(LanguageVersion.CSharp11_0)
     {
         UsingDeclarations = true,
@@ -35,7 +36,7 @@ public sealed class Workspace
     public OpenedAsm Open(string path)
     {
         path = System.IO.Path.GetFullPath(path);
-        return _open.GetOrAdd(path, p =>
+        var asm = _open.GetOrAdd(path, p =>
         {
             var pe = new PEFile(p);
             var module = ModuleDefMD.Load(p);
@@ -43,6 +44,8 @@ public sealed class Workspace
             var decomp = new CSharpDecompiler(p, resolver, Settings);
             return new OpenedAsm(p, module, decomp, pe);
         });
+        _current ??= asm.Path;
+        return asm;
     }
 
     public bool Close(string path)
@@ -51,16 +54,36 @@ public sealed class Workspace
         if (_open.TryRemove(path, out var a))
         {
             try { a.Module.Dispose(); } catch { }
+            if (string.Equals(_current, path, System.StringComparison.OrdinalIgnoreCase))
+                _current = _open.Keys.FirstOrDefault();
             return true;
         }
         return false;
     }
 
-    public OpenedAsm Get(string path)
+    /// <summary>Resolve the asm to use. If path is null/empty, use the currently-active one.</summary>
+    public OpenedAsm Get(string? path)
     {
-        path = System.IO.Path.GetFullPath(path);
-        if (!_open.TryGetValue(path, out var a))
-            throw new System.InvalidOperationException($"asm_file not opened: {path}. Call asm_file_open first.");
+        if (string.IsNullOrEmpty(path))
+        {
+            if (_current == null || !_open.TryGetValue(_current, out var cur))
+                throw new System.InvalidOperationException("no active asm_file. Open one via asm_file_open or set it via asm_file_switch.");
+            return cur;
+        }
+        var full = System.IO.Path.GetFullPath(path);
+        if (!_open.TryGetValue(full, out var a))
+            throw new System.InvalidOperationException($"asm_file not opened: {full}. Call asm_file_open first.");
+        return a;
+    }
+
+    public string? Current => _current;
+
+    public OpenedAsm Switch(string path)
+    {
+        var full = System.IO.Path.GetFullPath(path);
+        if (!_open.TryGetValue(full, out var a))
+            throw new System.InvalidOperationException($"asm_file not opened: {full}. Call asm_file_open first.");
+        _current = full;
         return a;
     }
 

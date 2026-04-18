@@ -70,9 +70,10 @@ internal static class Program
 
     private static void RegisterShared(IServiceCollection s, Cli cli)
     {
-        var agent = new AgentClient();
-        if (cli.AgentHost != null) agent.Configure(cli.AgentHost, cli.AgentPort, cli.AgentToken);
-        s.AddSingleton(agent);
+        var registry = new AgentRegistry();
+        if (cli.AgentHost != null) registry.Default.Configure(cli.AgentHost, cli.AgentPort, cli.AgentToken);
+        s.AddSingleton(registry);
+        s.AddSingleton<AgentClient>(registry.Default);
         s.AddSingleton<Workspace>();
     }
 }

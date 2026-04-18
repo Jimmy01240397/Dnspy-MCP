@@ -1,15 +1,16 @@
-using System.Collections.Concurrent;
 using System.IO;
 using System.Net.Sockets;
 using System.Text;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace DnSpyMcp.Services;
 
 /// <summary>
 /// Persistent TCP + newline-delimited-JSON client for dnspymcpagent.
-/// One connection is kept alive across many tool invocations.
+/// One connection is kept alive across many tool invocations. Requests/
+/// responses use System.Text.Json so the objects returned by <see cref="Result"/>
+/// serialize cleanly back to MCP clients.
 /// </summary>
 public sealed class AgentClient : IDisposable
 {
@@ -50,7 +51,7 @@ public sealed class AgentClient : IDisposable
             if (_token != null)
             {
                 var resp = CallLocked("auth", new { token = _token });
-                if (resp["ok"]?.Value<bool>() != true)
+                if (resp["ok"]?.GetValue<bool>() != true)
                     throw new IOException("agent auth failed: " + resp["error"]);
             }
         }
@@ -69,7 +70,7 @@ public sealed class AgentClient : IDisposable
         _writer = null; _reader = null; _tcp = null;
     }
 
-    public JObject Call(string method, object? @params = null)
+    public JsonObject Call(string method, object? @params = null)
     {
         lock (_connectLock)
         {
@@ -79,22 +80,33 @@ public sealed class AgentClient : IDisposable
         }
     }
 
-    private JObject CallLocked(string method, object? @params)
+    private JsonObject CallLocked(string method, object? @params)
     {
         if (_writer == null || _reader == null) throw new InvalidOperationException("not connected");
         int id = ++_nextId;
-        var frame = JsonConvert.SerializeObject(new { id, method, @params });
+        var frame = JsonSerializer.Serialize(new { id, method, @params });
         _writer.WriteLine(frame);
         var line = _reader.ReadLine() ?? throw new IOException("agent closed unexpectedly");
-        return JObject.Parse(line);
+        return JsonNode.Parse(line)?.AsObject()
+               ?? throw new IOException("agent returned non-object response");
     }
 
-    public JToken Result(string method, object? @params = null)
+    /// <summary>
+    /// Issue an RPC and return the `result` payload as a JsonNode (serializes
+    /// cleanly through System.Text.Json). Throws if the agent reported an error.
+    /// </summary>
+    public JsonNode? Result(string method, object? @params = null)
     {
         var resp = Call(method, @params);
-        if (resp["ok"]?.Value<bool>() != true)
-            throw new InvalidOperationException($"agent error ({method}): {resp["error"]}");
-        return resp["result"] ?? JValue.CreateNull();
+        if (resp["ok"]?.GetValue<bool>() != true)
+        {
+            var err = resp["error"]?.ToString() ?? "unknown";
+            var errType = resp["errorType"]?.ToString();
+            throw new InvalidOperationException($"agent error ({method}): {err}{(errType != null ? $" [{errType}]" : "")}");
+        }
+        var result = resp["result"];
+        // detach from parent so the caller can freely move it into a new tree
+        return result?.DeepClone();
     }
 
     public void Dispose() => Close();

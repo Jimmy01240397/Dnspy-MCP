@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "dnspymcp", "dnspymcp\dnspym
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "dnspymcpagent", "dnspymcpagent\dnspymcpagent.csproj", "{31C09992-52A1-46FE-97C2-8CD8D731E244}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "dnspymcptest", "dnspymcptest\dnspymcptest.csproj", "{55F4C7B1-2E10-4F43-A0B2-9D9E0E3CABCD}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -41,6 +43,18 @@ Global
 		{31C09992-52A1-46FE-97C2-8CD8D731E244}.Release|x64.Build.0 = Release|x64
 		{31C09992-52A1-46FE-97C2-8CD8D731E244}.Release|x86.ActiveCfg = Release|x64
 		{31C09992-52A1-46FE-97C2-8CD8D731E244}.Release|x86.Build.0 = Release|x64
+		{55F4C7B1-2E10-4F43-A0B2-9D9E0E3CABCD}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{55F4C7B1-2E10-4F43-A0B2-9D9E0E3CABCD}.Debug|Any CPU.Build.0 = Debug|x64
+		{55F4C7B1-2E10-4F43-A0B2-9D9E0E3CABCD}.Debug|x64.ActiveCfg = Debug|x64
+		{55F4C7B1-2E10-4F43-A0B2-9D9E0E3CABCD}.Debug|x64.Build.0 = Debug|x64
+		{55F4C7B1-2E10-4F43-A0B2-9D9E0E3CABCD}.Debug|x86.ActiveCfg = Debug|x64
+		{55F4C7B1-2E10-4F43-A0B2-9D9E0E3CABCD}.Debug|x86.Build.0 = Debug|x64
+		{55F4C7B1-2E10-4F43-A0B2-9D9E0E3CABCD}.Release|Any CPU.ActiveCfg = Release|x64
+		{55F4C7B1-2E10-4F43-A0B2-9D9E0E3CABCD}.Release|Any CPU.Build.0 = Release|x64
+		{55F4C7B1-2E10-4F43-A0B2-9D9E0E3CABCD}.Release|x64.ActiveCfg = Release|x64
+		{55F4C7B1-2E10-4F43-A0B2-9D9E0E3CABCD}.Release|x64.Build.0 = Release|x64
+		{55F4C7B1-2E10-4F43-A0B2-9D9E0E3CABCD}.Release|x86.ActiveCfg = Release|x64
+		{55F4C7B1-2E10-4F43-A0B2-9D9E0E3CABCD}.Release|x86.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

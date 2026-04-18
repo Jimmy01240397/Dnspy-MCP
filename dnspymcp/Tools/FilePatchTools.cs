@@ -15,9 +15,9 @@ namespace DnSpyMcp.Tools;
 public static class FilePatchTools
 {
     [McpServerTool(Name = "file_patch_il_nop")]
-    [Description("[FILE] Replace a range of IL instructions with nops and save the assembly to outputPath. Params: asmPath, typeFullName, methodName, overloadIndex=0, startOffset, endOffset (inclusive), outputPath.")]
-    public static object PatchIlNop(Workspace ws, string asmPath, string typeFullName, string methodName,
-                                    int startOffset, int endOffset, string outputPath, int overloadIndex = 0)
+    [Description("[FILE] Replace a range of IL instructions with nops and save to outputPath. Params: typeFullName, methodName, startOffset, endOffset (inclusive), outputPath, asmPath (optional), overloadIndex=0.")]
+    public static object PatchIlNop(Workspace ws, string typeFullName, string methodName,
+                                    int startOffset, int endOffset, string outputPath, string? asmPath = null, int overloadIndex = 0)
     {
         var a = ws.Get(asmPath);
         var t = a.Module.FindReflection(typeFullName) ?? throw new ArgumentException($"type not found: {typeFullName}");
@@ -54,8 +54,8 @@ public static class FilePatchTools
     }
 
     [McpServerTool(Name = "file_save_assembly")]
-    [Description("[FILE] Write the in-memory ModuleDef (with your patches) back to a new path. Params: asmPath, outputPath.")]
-    public static object SaveAssembly(Workspace ws, string asmPath, string outputPath)
+    [Description("[FILE] Write the in-memory ModuleDef (with your patches) back to a new path. Params: outputPath, asmPath (optional).")]
+    public static object SaveAssembly(Workspace ws, string outputPath, string? asmPath = null)
     {
         var a = ws.Get(asmPath);
         a.Module.Write(outputPath);
