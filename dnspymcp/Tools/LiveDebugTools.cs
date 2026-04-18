@@ -17,8 +17,8 @@ public static class LiveDebugTools
     // ---- agent lifecycle / multi-session -------------------------------
 
     [McpServerTool(Name = "live_agent_connect")]
-    [Description("[LIVE] Open a persistent TCP connection to a dnspymcpagent. Registers this connection under the given name (default='default') and makes it the active session. Params: host='127.0.0.1', port=5555, token=null, name='default'.")]
-    public static object AgentConnect(AgentRegistry reg, string host = "127.0.0.1", int port = 5555, string? token = null, string name = "default")
+    [Description("[LIVE] Open a persistent TCP connection to a dnspymcpagent. host and port are required — you must know where your agent is listening. Registers this connection under the given name (default='default') and makes it the active session. Params: host (required), port (required), token=null, name='default'.")]
+    public static object AgentConnect(AgentRegistry reg, string host, int port, string? token = null, string name = "default")
     {
         var agent = reg.GetOrCreate(name);
         agent.Configure(host, port, token);

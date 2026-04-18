@@ -71,7 +71,6 @@ internal static class Program
     private static void RegisterShared(IServiceCollection s, Cli cli)
     {
         var registry = new AgentRegistry();
-        if (cli.AgentHost != null) registry.Default.Configure(cli.AgentHost, cli.AgentPort, cli.AgentToken);
         s.AddSingleton(registry);
         s.AddSingleton<AgentClient>(registry.Default);
         s.AddSingleton<Workspace>();
@@ -85,10 +84,6 @@ internal sealed class Cli
     public int BindPort { get; set; } = 5556;
     public string McpPath { get; set; } = "/mcp";
 
-    public string? AgentHost { get; set; }
-    public int AgentPort { get; set; } = 5555;
-    public string? AgentToken { get; set; }
-
     public static Cli? Parse(string[] args)
     {
         var o = new Cli();
@@ -101,9 +96,6 @@ internal sealed class Cli
                 case "--bind-host": o.BindHost = Next() ?? throw new ArgumentException("--bind-host needs value"); break;
                 case "--bind-port": o.BindPort = int.Parse(Next()!); break;
                 case "--mcp-path":  o.McpPath = Next() ?? "/mcp"; break;
-                case "--agent-host": o.AgentHost = Next(); break;
-                case "--agent-port": o.AgentPort = int.Parse(Next()!); break;
-                case "--agent-token": o.AgentToken = Next(); break;
                 case "--help":
                 case "-?":
                 case "-h":
@@ -129,10 +121,9 @@ internal sealed class Cli
             Usage:
               dnspymcp [--transport stdio|http|sse]
                        [--bind-host 127.0.0.1] [--bind-port 5556] [--mcp-path /mcp]
-                       [--agent-host HOST] [--agent-port 5555] [--agent-token TOK]
 
-            --agent-* presets the TCP connection target for the live_* tools.
-            You can always call live_agent_connect to override at runtime.
+            The agent target is picked via the live_agent_connect tool at
+            runtime — host and port are required parameters there.
             """);
     }
 }

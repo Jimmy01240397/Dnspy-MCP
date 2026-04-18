@@ -101,13 +101,12 @@ Exactly one client at a time — a second connection is rejected.
 dnspymcp.exe                                   # stdio (default — for Claude Desktop etc.)
 dnspymcp.exe --transport http --bind-port 5556 # Streamable HTTP
 dnspymcp.exe --transport sse  --bind-port 5556 # legacy SSE
-
-# optional: preset agent connection
-dnspymcp.exe --agent-host 10.0.0.5 --agent-port 5555 --agent-token SECRET
 ```
 
-At runtime you can always call `live_agent_connect(host, port, token)` to
-override or switch target agents.
+The agent target is not a CLI concern — host and port are **required**
+parameters of the `live_agent_connect` tool, so the LLM must declare
+where it's connecting every time. You can call it multiple times with
+different `name`s to register several target agents.
 
 ---
 
