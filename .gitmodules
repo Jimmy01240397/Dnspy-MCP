@@ -1,0 +1,3 @@
+[submodule "dnspy"]
+	path = dnspy
+	url = https://github.com/dnSpyEx/dnSpy.git

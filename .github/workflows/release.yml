@@ -1,0 +1,46 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+
+      - name: Build everything via builder.ps1
+        shell: pwsh
+        run: pwsh -File builder.ps1 -Configuration Release -Zip
+
+      - name: Locate release zip
+        id: zipinfo
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path dist -Filter 'dnspymcp-*-win-x64.zip' | Select-Object -First 1
+          if (-not $zip) { throw "builder.ps1 did not produce a zip" }
+          "path=$($zip.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: ${{ steps.zipinfo.outputs.path }}

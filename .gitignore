@@ -1,0 +1,44 @@
+# Local test target — never committed
+/dnspymcptest/
+
+# Prebuilt dnSpy / dependency DLLs — populated by scripts/bootstrap-lib.ps1
+/lib/
+
+# Build outputs
+**/bin/
+**/obj/
+**/out/
+
+# Rider / VS
+.idea/
+.vs/
+*.user
+*.suo
+
+# ReSharper
+_ReSharper*/
+*.DotSettings.user
+
+# NuGet
+*.nupkg
+*.snupkg
+
+# MSBuild
+*.VisualState.xml
+TestResult.xml
+[Bb]uild[Ll]og.*
+
+# Logs
+*.log
+*.binlog
+
+# Dumps / traces
+*.dmp
+*.etl
+*.trace
+*.pdb.bak
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store

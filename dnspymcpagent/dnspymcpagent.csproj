@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>dnspymcpagent</AssemblyName>
+    <RootNamespace>DnSpyMcp.Agent</RootNamespace>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Krafs.Publicizer" Version="2.2.1">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Microsoft.Diagnostics.Runtime" Version="3.1.512801" />
+    <PackageReference Include="Iced" Version="1.21.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Publicize Include="dnSpy.Debugger.DotNet.CorDebug.x" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="dnSpy.Debugger.DotNet.CorDebug.x">
+      <HintPath>..\lib\dnSpy.Debugger.DotNet.CorDebug.x.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="dnSpy.Contracts.Debugger.DotNet.CorDebug">
+      <HintPath>..\lib\dnSpy.Contracts.Debugger.DotNet.CorDebug.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="dnSpy.Contracts.Debugger.DotNet">
+      <HintPath>..\lib\dnSpy.Contracts.Debugger.DotNet.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="dnSpy.Contracts.Debugger">
+      <HintPath>..\lib\dnSpy.Contracts.Debugger.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="dnSpy.Contracts.DnSpy">
+      <HintPath>..\lib\dnSpy.Contracts.DnSpy.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="dnSpy.Contracts.Logic">
+      <HintPath>..\lib\dnSpy.Contracts.Logic.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="dnSpy.Debugger.DotNet.Metadata">
+      <HintPath>..\lib\dnSpy.Debugger.DotNet.Metadata.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="dnlib">
+      <HintPath>..\lib\dnlib.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
