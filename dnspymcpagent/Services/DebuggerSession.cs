@@ -177,7 +177,19 @@ public sealed class DebuggerSession : IDisposable
                 {
                     _dbgThread?.Invoke(() =>
                     {
-                        try { _dnDebugger.TerminateProcesses(); } catch { /* ignore */ }
+                        try
+                        {
+                            if (_dnDebugger.ProcessState != DebuggerProcessState.Terminated)
+                            {
+                                // TryDetach returns an HRESULT. Only fall back to terminate
+                                // when the CLR refuses to release the debuggee cleanly
+                                // (CORDBG_E_UNRECOVERABLE_ERROR / CORDBG_E_PROCESS_NOT_SYNCHRONIZED).
+                                int hr = _dnDebugger.TryDetach();
+                                if (hr < 0)
+                                    _dnDebugger.TerminateProcesses();
+                            }
+                        }
+                        catch { /* ignore */ }
                     });
                 }
                 catch { /* ignore */ }

@@ -11,27 +11,11 @@ public static class SessionHandlers
 {
     public static void Register(Dispatcher d)
     {
-        d.Register("session.attach",
-            "[LIVE] Attach to a running .NET process by PID. Required before most debug tools.",
-            p =>
-            {
-                var pid = Dispatcher.Req<int>(p, "pid");
-                Program.Session.Attach(pid);
-                return new { attached = true, description = Program.Session.Describe() };
-            });
-
-        d.Register("session.load_dump",
-            "[LIVE] Load a crash dump (.dmp) for offline analysis via ClrMD.",
-            p =>
-            {
-                var path = Dispatcher.Req<string>(p, "path");
-                Program.Session.LoadDump(path);
-                return new { loaded = true, description = Program.Session.Describe() };
-            });
-
-        d.Register("session.detach",
-            "[LIVE] Detach from the current target / unload dump.",
-            _ => { Program.Session.Detach(); return new { detached = true }; });
+        // Attach / detach / load-dump are NOT exposed as runtime methods on purpose.
+        // The design is "one agent process == one target": boot the agent with
+        // `--attach <pid>` or `--dump <path>` and it stays pinned to that target
+        // until it exits. To talk to a different target, start another agent on a
+        // different port and let the MCP server connect to it via live_agent_connect.
 
         d.Register("session.info",
             "[LIVE] Describe the current debug session (attached pid / loaded dump).",
@@ -45,7 +29,7 @@ public static class SessionHandlers
             });
 
         d.Register("session.dotnet_processes",
-            "List .NET processes on this machine (has CLR loaded). Use to find the PID for session.attach.",
+            "List .NET processes on this machine (has CLR loaded). Use to pick a PID for `dnspymcpagent --attach`.",
             _ =>
             {
                 var rows = new List<object>();

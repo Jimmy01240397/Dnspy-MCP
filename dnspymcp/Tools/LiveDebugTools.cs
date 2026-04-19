@@ -15,32 +15,31 @@ namespace DnSpyMcp.Tools;
 [McpServerToolType]
 public static class LiveDebugTools
 {
-    // ---- agent lifecycle / multi-session -------------------------------
+    // ---- agent session management (idalib-style) ----------------------
+    // Each agent endpoint (host:port) is a named session. Open once, then
+    // list / switch between them for free — the TCP connection is kept warm
+    // and auto-reconnects if the underlying agent restarts. You never need
+    // to disconnect+reconnect between tool calls; just `switch`.
 
-    [McpServerTool(Name = "live_agent_connect")]
-    [Description("[LIVE] Open a persistent TCP connection to a dnspymcpagent. host and port are required — you must know where your agent is listening. Registers this connection under the given name (default='default') and makes it the active session. Params: host (required), port (required), token=null, name='default'.")]
-    public static object AgentConnect(AgentRegistry reg, string host, int port, string? token = null, string name = "default")
+    [McpServerTool(Name = "live_agent_open")]
+    [Description("[LIVE] Open (or re-open) a named session to a dnspymcpagent at host:port and make it active. Idempotent — calling with an existing name reconfigures and reconnects that slot. Params: host (required), port (required), token=null, name='default'.")]
+    public static object AgentOpen(AgentRegistry reg, string host, int port, string? token = null, string name = "default")
         => ToolGuard.Run(() =>
     {
         var agent = reg.GetOrCreate(name);
         agent.Configure(host, port, token);
         agent.Connect();
         reg.SetActive(name);
-        return (object)new { connected = true, name, host, port, active = name };
+        return (object)new { opened = true, name, host, port, active = name };
     });
 
-    [McpServerTool(Name = "live_agent_disconnect")]
-    [Description("[LIVE] Close the TCP connection to an agent. Params: name (optional — uses active).")]
-    public static object AgentDisconnect(AgentRegistry reg, string? name = null) => ToolGuard.Run(() =>
-    {
-        var resolved = name ?? reg.ActiveName ?? throw new McpException("no active agent");
-        var agent = reg.Get(resolved);
-        agent.Close();
-        return (object)new { disconnected = true, name = resolved };
-    });
+    [McpServerTool(Name = "live_agent_close")]
+    [Description("[LIVE] Close a session: disconnects TCP and unregisters the slot. Params: name (required).")]
+    public static object AgentClose(AgentRegistry reg, string name) => ToolGuard.Run(() =>
+        (object)new { closed = reg.Remove(name), current = reg.ActiveName });
 
     [McpServerTool(Name = "live_agent_list")]
-    [Description("[LIVE] List every registered agent slot (name, host:port, connected?, active?).")]
+    [Description("[LIVE] List every open session (name, host:port, connected?, active?).")]
     public static object AgentList(AgentRegistry reg) => ToolGuard.Run(() =>
     {
         var active = reg.ActiveName;
@@ -54,24 +53,15 @@ public static class LiveDebugTools
     });
 
     [McpServerTool(Name = "live_agent_current")]
-    [Description("[LIVE] Return the currently-active agent slot name.")]
-    public static object AgentCurrent(AgentRegistry reg) => ToolGuard.Run(() => (object)new { active = reg.ActiveName });
+    [Description("[LIVE] Return the currently-active session name (used by other LIVE tools when 'agent' is omitted).")]
+    public static object AgentCurrent(AgentRegistry reg) => ToolGuard.Run(() => (object)new { current = reg.ActiveName });
 
     [McpServerTool(Name = "live_agent_switch")]
-    [Description("[LIVE] Switch the active agent slot. Subsequent live_* tools target this one when 'agent' is omitted.")]
+    [Description("[LIVE] Switch the active session. Subsequent LIVE tools target this one when 'agent' is omitted — no reconnect needed.")]
     public static object AgentSwitch(AgentRegistry reg, string name) => ToolGuard.Run(() =>
     {
         reg.Switch(name);
-        return (object)new { active = name };
-    });
-
-    [McpServerTool(Name = "live_agent_remove")]
-    [Description("[LIVE] Close and unregister an agent slot (the 'default' slot cannot be removed).")]
-    public static object AgentRemove(AgentRegistry reg, string name) => ToolGuard.Run(() =>
-    {
-        if (string.Equals(name, "default", StringComparison.OrdinalIgnoreCase))
-            throw new McpException("'default' slot cannot be removed; use live_agent_disconnect.");
-        return (object)new { removed = reg.Remove(name) };
+        return (object)new { current = name };
     });
 
     [McpServerTool(Name = "live_agent_list_methods")]
@@ -86,20 +76,11 @@ public static class LiveDebugTools
     public static object ListProcesses(AgentRegistry reg, string? agent = null)
         => ToolGuard.Run(() => (object)reg.Get(agent).Result("session.dotnet_processes")!);
 
-    [McpServerTool(Name = "live_session_attach")]
-    [Description("[LIVE] Attach the agent to a .NET PID.")]
-    public static object Attach(AgentRegistry reg, int pid, string? agent = null)
-        => ToolGuard.Run(() => (object)reg.Get(agent).Result("session.attach", new { pid })!);
-
-    [McpServerTool(Name = "live_session_load_dump")]
-    [Description("[LIVE] Have the agent open a crash dump (.dmp) via ClrMD — heap/memory tools work, live debug tools do not.")]
-    public static object LoadDump(AgentRegistry reg, string path, string? agent = null)
-        => ToolGuard.Run(() => (object)reg.Get(agent).Result("session.load_dump", new { path })!);
-
-    [McpServerTool(Name = "live_session_detach")]
-    [Description("[LIVE] Detach / unload the current debug target.")]
-    public static object Detach(AgentRegistry reg, string? agent = null)
-        => ToolGuard.Run(() => (object)reg.Get(agent).Result("session.detach")!);
+    // session.attach / session.detach / session.load_dump are intentionally NOT
+    // exposed as MCP tools. An agent process is pinned to one target for its
+    // lifetime — boot it with `dnspymcpagent.exe --attach <pid>` or `--dump <path>`.
+    // To debug a different target, start a second agent on a different port and
+    // call live_agent_open with that host:port.
 
     [McpServerTool(Name = "live_session_info")]
     [Description("[LIVE] Describe the agent's current debug session (pid / dump / state).")]

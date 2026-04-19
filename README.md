@@ -44,7 +44,7 @@ running process".
 ### Static (FILE) tools
 
 ```
-asm_file_open / asm_file_close / asm_file_list
+asm_file_open / asm_file_close / asm_file_list / asm_file_current / asm_file_switch
 asm_file_list_types / asm_file_list_methods
 decompile_type / decompile_method
 il_method / il_method_by_token
@@ -55,10 +55,9 @@ file_patch_il_nop / file_patch_bytes / file_save_assembly
 ### Live (LIVE) tools — proxy to the agent
 
 ```
-live_agent_connect / live_agent_disconnect / live_agent_list_methods
-live_agent_list / live_agent_current / live_agent_switch / live_agent_remove
-live_list_dotnet_processes / live_session_attach / live_session_load_dump
-live_session_detach / live_session_info
+live_agent_open / live_agent_close / live_agent_list
+live_agent_current / live_agent_switch / live_agent_list_methods
+live_list_dotnet_processes / live_session_info
 live_session_go / live_session_pause / live_session_terminate / live_wait_paused
 
 live_thread_list / live_thread_stack / live_thread_current
@@ -104,7 +103,7 @@ dnspymcp.exe --transport sse  --bind-port 5556 # legacy SSE
 ```
 
 The agent target is not a CLI concern — host and port are **required**
-parameters of the `live_agent_connect` tool, so the LLM must declare
+parameters of the `live_agent_open` tool, so the LLM must declare
 where it's connecting every time. You can call it multiple times with
 different `name`s to register several target agents.
 
@@ -135,21 +134,26 @@ tracked as a git submodule under `dnspy/`, but `lib/` is **not** committed
 
 ---
 
-## Multi-agent registry
+## Agent session registry
 
-`dnspymcp` keeps a named registry of agent connections so one MCP server can
-drive several target hosts in the same session. The `default` slot is always
-present and cannot be removed.
+`dnspymcp` keeps a named registry of agent sessions so one MCP server can
+drive several target hosts at once. An "agent session" is a persistent
+TCP link to one `dnspymcpagent` process (which itself is pinned to one
+target PID or dump at startup). The registry is idalib-style: open once,
+switch for free — TCP auto-reconnects if the agent restarts, so you never
+need to disconnect between tool calls.
 
 ```
-live_agent_connect(host, port, token?, name?)   # add / replace a slot, becomes active
-live_agent_list()                                # list slots, mark which is active
-live_agent_current()                             # which slot LIVE calls go to right now
-live_agent_switch(name)                          # route LIVE calls to another slot
-live_agent_remove(name)                          # drop a slot (default is protected)
+live_agent_open(host, port, token?, name?)    # open/re-open a session, becomes active
+live_agent_close(name)                         # disconnect TCP and drop the slot
+live_agent_list()                              # list sessions, mark the active one
+live_agent_current()                           # which slot LIVE calls go to right now
+live_agent_switch(name)                        # route LIVE calls to another slot
 ```
 
-Every `live_*` call goes to the currently-active slot; switch to fan out.
+Every `live_*` call targets the active slot unless you pass `agent=<name>`.
+To debug a different PID, boot another `dnspymcpagent` on a different port
+and `live_agent_open` against it — there is no runtime re-attach.
 
 ---
 

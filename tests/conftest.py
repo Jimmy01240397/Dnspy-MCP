@@ -164,7 +164,7 @@ def testtarget_asm() -> Path:
 @pytest.fixture(scope="session")
 def live_agent(mcp: MCPClient):
     """Ensure the MCP server is connected to the agent. Returns the mcp client."""
-    r = mcp.call("live_agent_connect", {"host": AGENT_HOST, "port": AGENT_PORT})
+    r = mcp.call("live_agent_open", {"host": AGENT_HOST, "port": AGENT_PORT})
     if not r["ok"]:
-        pytest.skip(f"agent connect failed: {r['text']}")
+        pytest.skip(f"agent open failed: {r['text']}")
     return mcp

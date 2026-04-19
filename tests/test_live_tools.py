@@ -30,17 +30,20 @@ def test_agent_list_current_switch(live_agent):
     active = [a for a in lst if a["active"]]
     assert len(active) == 1
     cur = live_agent.call_json("live_agent_current")
-    assert cur["active"] == active[0]["name"]
+    assert cur["current"] == active[0]["name"]
 
-    # switching to the same default slot should succeed
+    # switching to the same slot should succeed
     sw = live_agent.call_json("live_agent_switch", {"name": active[0]["name"]})
-    assert sw["active"] == active[0]["name"]
+    assert sw["current"] == active[0]["name"]
 
 
-def test_agent_default_slot_is_protected(live_agent):
-    # removing the default slot is explicitly forbidden — the tool must fail
-    r = live_agent.call("live_agent_remove", {"name": "default"})
-    assert not r["ok"], f"expected failure but got {r['text']}"
+def test_agent_open_is_idempotent(live_agent):
+    # opening the already-active session again should succeed and stay active
+    lst = live_agent.call_json("live_agent_list")
+    slot = next(a for a in lst if a["active"])
+    r = live_agent.call_json("live_agent_open", {
+        "host": slot["host"], "port": slot["port"], "name": slot["name"]})
+    assert r["opened"] and r["active"] == slot["name"]
 
 
 def test_agent_list_methods(live_agent):

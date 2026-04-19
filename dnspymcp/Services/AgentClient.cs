@@ -105,7 +105,7 @@ public sealed class AgentClient : IDisposable
 
     private JsonObject CallLocked(string method, object? @params)
     {
-        if (_writer == null || _reader == null) throw new McpException("agent client is not connected — call live_agent_connect first");
+        if (_writer == null || _reader == null) throw new McpException("agent client is not connected — call live_agent_open first");
         int id = ++_nextId;
         var frame = JsonSerializer.Serialize(new { id, method, @params });
         _writer.WriteLine(frame);
