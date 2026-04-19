@@ -30,7 +30,7 @@ def test_list_tools_surface(mcp):
     # smoke check — make sure the catalog contains both FILE and LIVE tools.
     for must in ("asm_file_open", "decompile_type", "il_method", "find_string",
                  "xref_to_method", "file_patch_il_nop",
-                 "live_agent_connect", "live_list_dotnet_processes",
+                 "live_agent_open", "live_list_dotnet_processes",
                  "live_heap_stats", "live_bp_set_by_name"):
         assert must in names, f"missing tool: {must}"
 
@@ -179,6 +179,42 @@ def test_asm_current_and_switch(mcp, testtarget_asm: Path):
     # switch is a no-op when there's only one, but should still succeed
     switched = mcp.call_json("asm_file_switch", {"asmPath": path})
     assert switched["current"].lower() == path.lower()
+
+
+def test_asm_open_auto_switches_active(mcp, testtarget_asm: Path, tmp_path_factory):
+    """Opening a second asm must make it the new active session (matches live_agent_open)."""
+    primary = str(testtarget_asm)
+    mcp.call_json("asm_file_open", {"asmPath": primary})
+    mcp.call_json("asm_file_switch", {"asmPath": primary})
+
+    # copy the asm so we have a distinct path to open
+    copy_dir = tmp_path_factory.mktemp("autoswitch")
+    copy = copy_dir / "dnspymcptest.copy.exe"
+    shutil.copy2(primary, copy)
+    mcp.call_json("asm_file_open", {"asmPath": str(copy)})
+
+    cur = mcp.call_json("asm_file_current")
+    assert cur["current"].lower() == str(copy).lower(), (
+        "asm_file_open should switch the active session to the newly-opened asm")
+
+    # cleanup: switch back and close the copy so later tests aren't affected
+    mcp.call_json("asm_file_close", {"asmPath": str(copy)})
+    mcp.call_json("asm_file_switch", {"asmPath": primary})
+
+
+def test_asm_close_releases_file_handle(mcp, testtarget_asm: Path, tmp_path_factory):
+    """asm_file_close must dispose the PEFile/ModuleDef so the file can be deleted."""
+    import os
+    copy_dir = tmp_path_factory.mktemp("release")
+    copy = copy_dir / "dnspymcptest.release.exe"
+    shutil.copy2(testtarget_asm, copy)
+
+    mcp.call_json("asm_file_open", {"asmPath": str(copy)})
+    mcp.call_json("asm_file_close", {"asmPath": str(copy)})
+
+    # If the handle leaks the delete raises PermissionError on Windows.
+    os.remove(copy)
+    assert not copy.exists()
 
 
 def test_asm_default_session_omit_path(mcp, testtarget_asm: Path):

@@ -15,7 +15,7 @@ namespace DnSpyMcp.Services;
 ///
 /// Keys are absolute file paths. One asm_file is one .dll / .exe.
 /// </summary>
-public sealed class Workspace
+public sealed class Workspace : IDisposable
 {
     public sealed class OpenedAsm(string path, ModuleDefMD module, CSharpDecompiler decompiler, PEFile peFile)
     {
@@ -42,10 +42,13 @@ public sealed class Workspace
             var pe = new PEFile(p);
             var module = ModuleDefMD.Load(p);
             var resolver = new UniversalAssemblyResolver(p, true, pe.Metadata.DetectTargetFrameworkId());
-            var decomp = new CSharpDecompiler(p, resolver, Settings);
+            // Share the PEFile with the decompiler so Close() only needs to
+            // dispose one mapping. Passing the path would make the decompiler
+            // open its own PEFile and leak the file handle.
+            var decomp = new CSharpDecompiler(pe, resolver, Settings);
             return new OpenedAsm(p, module, decomp, pe);
         });
-        _current ??= asm.Path;
+        _current = asm.Path;
         return asm;
     }
 
@@ -54,7 +57,10 @@ public sealed class Workspace
         path = System.IO.Path.GetFullPath(path);
         if (_open.TryRemove(path, out var a))
         {
+            // Release every resource that might still map the file on disk,
+            // otherwise the file stays locked after close.
             try { a.Module.Dispose(); } catch { }
+            try { a.PEFile.Dispose(); } catch { }
             if (string.Equals(_current, path, System.StringComparison.OrdinalIgnoreCase))
                 _current = _open.Keys.FirstOrDefault();
             return true;
@@ -89,4 +95,14 @@ public sealed class Workspace
     }
 
     public IEnumerable<OpenedAsm> All => _open.Values;
+
+    /// <summary>
+    /// Close every opened asm — called by the DI container when the host shuts
+    /// down so on-disk files never stay locked after MCP exits.
+    /// </summary>
+    public void Dispose()
+    {
+        foreach (var path in _open.Keys.ToArray())
+            Close(path);
+    }
 }

@@ -12,21 +12,13 @@ namespace DnSpyMcp.Services;
 /// Thread safety: the agent map is a ConcurrentDictionary; the active-name slot
 /// is guarded by a small lock. AgentClient itself serialises its own IO.
 /// </summary>
-public sealed class AgentRegistry
+public sealed class AgentRegistry : IDisposable
 {
     private readonly ConcurrentDictionary<string, AgentClient> _agents = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _activeLock = new();
     private string? _active;
 
-    public AgentClient Default { get; }
-
-    public AgentRegistry()
-    {
-        // keep a single, always-present "default" agent for backwards compatibility
-        Default = new AgentClient();
-        _agents["default"] = Default;
-        _active = "default";
-    }
+    public AgentRegistry() { }
 
     public string? ActiveName
     {
@@ -40,13 +32,13 @@ public sealed class AgentRegistry
         {
             string? n;
             lock (_activeLock) n = _active;
-            if (n == null) throw new McpException("no active agent. Call live_agent_connect first.");
+            if (n == null) throw new McpException("no active agent. Call live_agent_open first.");
             if (!_agents.TryGetValue(n, out var a))
                 throw new McpException($"active agent '{n}' is gone (was it removed?).");
             return a;
         }
         if (!_agents.TryGetValue(name, out var agent))
-            throw new McpException($"agent '{name}' is not registered. Call live_agent_connect with this name.");
+            throw new McpException($"agent '{name}' is not registered. Call live_agent_open with this name.");
         return agent;
     }
 
@@ -77,7 +69,7 @@ public sealed class AgentRegistry
     public AgentClient Switch(string name)
     {
         if (!_agents.TryGetValue(name, out var a))
-            throw new McpException($"agent '{name}' is not registered. Call live_agent_connect with this name first.");
+            throw new McpException($"agent '{name}' is not registered. Call live_agent_open with this name first.");
         lock (_activeLock) _active = name;
         return a;
     }
@@ -88,4 +80,18 @@ public sealed class AgentRegistry
     }
 
     public IEnumerable<KeyValuePair<string, AgentClient>> All => _agents;
+
+    /// <summary>
+    /// Disconnect every registered slot — called by the DI container when the
+    /// host shuts down so we never leak TCP connections back to the agents.
+    /// </summary>
+    public void Dispose()
+    {
+        foreach (var kv in _agents.ToArray())
+        {
+            try { kv.Value.Dispose(); } catch { /* ignore */ }
+        }
+        _agents.Clear();
+        lock (_activeLock) _active = null;
+    }
 }

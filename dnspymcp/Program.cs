@@ -70,9 +70,10 @@ internal static class Program
 
     private static void RegisterShared(IServiceCollection s, Cli cli)
     {
-        var registry = new AgentRegistry();
-        s.AddSingleton(registry);
-        s.AddSingleton<AgentClient>(registry.Default);
+        // Let the DI container own both lifetimes. Externally-constructed
+        // singletons (AddSingleton(instance)) are *not* disposed on shutdown,
+        // which would leak agent TCP connections and leave opened asms locked.
+        s.AddSingleton<AgentRegistry>();
         s.AddSingleton<Workspace>();
     }
 }
@@ -122,7 +123,7 @@ internal sealed class Cli
               dnspymcp [--transport stdio|http|sse]
                        [--bind-host 127.0.0.1] [--bind-port 5556] [--mcp-path /mcp]
 
-            The agent target is picked via the live_agent_connect tool at
+            The agent target is picked via the live_agent_open tool at
             runtime — host and port are required parameters there.
             """);
     }
