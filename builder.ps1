@@ -13,11 +13,11 @@
         pwsh -File builder.ps1 -Clean
 
     Output layout:
-        lib/                     referenced DLLs for dnspymcpagent
-        dist/dnspymcp/           net9 MCP server (publish output)
-        dist/dnspymcpagent/      net48 agent   (build  output)
-        dist/lib/                mirror of lib/ for portable release
-        dist/dnspymcp-<ver>-win-x64.zip   if -Zip
+        lib/                                 referenced DLLs for dnspymcpagent
+        dist/dnspymcp/                       net9 MCP server (publish output)
+        dist/dnspymcpagent/                  net48 agent   (build  output)
+        dist/dnspymcp-<ver>-win-x64.zip      if -Zip (mcp server only)
+        dist/dnspymcpagent-<ver>-win-x64.zip if -Zip (agent only, lib/ already inlined)
 #>
 [CmdletBinding()]
 param(
@@ -99,21 +99,22 @@ Write-Host "==> building dnspymcpagent (net48)"
 & dotnet build (Join-Path $root 'dnspymcpagent/dnspymcpagent.csproj') -c $Configuration -o (Join-Path $distDir 'dnspymcpagent')
 if ($LASTEXITCODE -ne 0) { throw "dnspymcpagent build failed" }
 
-# ---------- 4. stage lib/ into dist/ ---------------------------------------
-Copy-Libs -From $libDir -To (Join-Path $distDir 'lib')
-
-foreach ($doc in 'README.md','LICENSE','CLAUDE.md') {
-    $p = Join-Path $root $doc
-    if (Test-Path $p) { Copy-Item $p $distDir -Force }
+# ---------- 4. stage docs into each component -----------------------------
+# Each zip is self-contained, so README + LICENSE land in both.
+$docs = @('README.md','LICENSE') | ForEach-Object { Join-Path $root $_ } | Where-Object { Test-Path $_ }
+foreach ($sub in 'dnspymcp','dnspymcpagent') {
+    foreach ($d in $docs) { Copy-Item $d (Join-Path $distDir $sub) -Force }
 }
 
-# ---------- 5. optional zip ------------------------------------------------
+# ---------- 5. optional zips ------------------------------------------------
 if ($Zip) {
     $tag = if ($Version) { $Version } else { "dev-" + (Get-Date -Format 'yyyyMMdd-HHmmss') }
-    $zipPath = Join-Path $distDir "dnspymcp-$tag-win-x64.zip"
-    if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-    Write-Host "==> zipping -> $zipPath"
-    Compress-Archive -Path (Join-Path $distDir '*') -DestinationPath $zipPath -Force
+    foreach ($sub in 'dnspymcp','dnspymcpagent') {
+        $zipPath = Join-Path $distDir "$sub-$tag-win-x64.zip"
+        if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+        Write-Host "==> zipping -> $zipPath"
+        Compress-Archive -Path (Join-Path $distDir "$sub/*") -DestinationPath $zipPath -Force
+    }
 }
 
 Write-Host "==> done"

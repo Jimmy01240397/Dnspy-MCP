@@ -29,13 +29,16 @@ jobs:
         shell: pwsh
         run: pwsh -File builder.ps1 -Configuration Release -Zip
 
-      - name: Locate release zip
+      - name: Locate release zips
         id: zipinfo
         shell: pwsh
         run: |
-          $zip = Get-ChildItem -Path dist -Filter 'dnspymcp-*-win-x64.zip' | Select-Object -First 1
-          if (-not $zip) { throw "builder.ps1 did not produce a zip" }
-          "path=$($zip.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $mcp   = Get-ChildItem -Path dist -Filter 'dnspymcp-*-win-x64.zip'      | Select-Object -First 1
+          $agent = Get-ChildItem -Path dist -Filter 'dnspymcpagent-*-win-x64.zip' | Select-Object -First 1
+          if (-not $mcp)   { throw "builder.ps1 did not produce a dnspymcp zip" }
+          if (-not $agent) { throw "builder.ps1 did not produce a dnspymcpagent zip" }
+          "mcp=$($mcp.FullName)"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "agent=$($agent.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -43,4 +46,6 @@ jobs:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
-          files: ${{ steps.zipinfo.outputs.path }}
+          files: |
+            ${{ steps.zipinfo.outputs.mcp }}
+            ${{ steps.zipinfo.outputs.agent }}
