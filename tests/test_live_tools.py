@@ -46,16 +46,44 @@ def test_agent_open_is_idempotent(live_agent):
     assert r["opened"] and r["active"] == slot["name"]
 
 
+def _items(env):
+    """Unwrap pagination envelope -> items list. Asserts envelope shape."""
+    assert isinstance(env, dict), f"expected envelope, got {type(env).__name__}"
+    for k in ("total", "offset", "returned", "truncated", "items"):
+        assert k in env, f"missing envelope key: {k}"
+    assert isinstance(env["items"], list)
+    return env["items"]
+
+
 def test_agent_list_methods(live_agent):
-    r = live_agent.call_json("live_agent_list_methods")
-    assert isinstance(r, list) and len(r) > 5
-    names = {m.get("method") or m.get("name") for m in r}
+    env = live_agent.call_json("live_agent_list_methods")
+    items = _items(env)
+    assert len(items) > 5
+    names = {m.get("method") or m.get("name") for m in items}
     assert any("session." in (n or "") for n in names)
 
 
+def test_agent_list_methods_paged(live_agent):
+    """offset/max should slice + set truncated/nextOffset correctly."""
+    full = _items(live_agent.call_json("live_agent_list_methods", {"max": 500}))
+    assert len(full) >= 3, "need at least 3 methods to test paging"
+    page1 = live_agent.call_json("live_agent_list_methods", {"offset": 0, "max": 2})
+    assert page1["total"] == len(full)
+    assert page1["returned"] == 2
+    assert page1["truncated"] is True
+    assert page1["nextOffset"] == 2
+    page2 = live_agent.call_json("live_agent_list_methods", {"offset": 2, "max": 2})
+    assert page2["offset"] == 2
+    # both pages disjoint
+    page1_names = {m.get("method") or m.get("name") for m in page1["items"]}
+    page2_names = {m.get("method") or m.get("name") for m in page2["items"]}
+    assert page1_names.isdisjoint(page2_names)
+
+
 def test_list_dotnet_processes(live_agent):
-    r = live_agent.call_json("live_list_dotnet_processes")
-    assert isinstance(r, list)
+    env = live_agent.call_json("live_list_dotnet_processes")
+    items = _items(env)
+    assert isinstance(items, list)
 
 
 def test_session_info_contains_pid(live_agent, testtarget_pid):
@@ -64,20 +92,20 @@ def test_session_info_contains_pid(live_agent, testtarget_pid):
 
 
 def test_heap_stats(live_agent):
-    stats = live_agent.call_json("live_heap_stats", {"top": 10})
-    assert isinstance(stats, list) and len(stats) >= 1
+    stats = _items(live_agent.call_json("live_heap_stats", {"top": 10}))
+    assert len(stats) >= 1
     # field name from agent is `type`; just assert rows are well-formed
     for row in stats:
         assert "type" in row and "count" in row and "totalSize" in row
 
 
 def test_heap_find_widget(live_agent):
-    rows = live_agent.call_json("live_heap_find_instances", {"typeName": "Widget", "max": 8})
-    assert isinstance(rows, list) and len(rows) >= 1
+    rows = _items(live_agent.call_json("live_heap_find_instances", {"typeName": "Widget", "max": 8}))
+    assert len(rows) >= 1
 
 
 def test_heap_read_widget_object(live_agent):
-    rows = live_agent.call_json("live_heap_find_instances", {"typeName": "Widget", "max": 1})
+    rows = _items(live_agent.call_json("live_heap_find_instances", {"typeName": "Widget", "max": 1}))
     assert rows, "no Widget instance on heap"
     addr = rows[0]["address"] if isinstance(rows[0], dict) else rows[0]
     obj = live_agent.call_json("live_heap_read_object", {"address": int(addr), "maxFields": 16})
@@ -85,7 +113,7 @@ def test_heap_read_widget_object(live_agent):
 
 
 def test_heap_read_string(live_agent):
-    strs = live_agent.call_json("live_heap_find_instances", {"typeName": "System.String", "max": 1})
+    strs = _items(live_agent.call_json("live_heap_find_instances", {"typeName": "System.String", "max": 1}))
     if not strs:
         pytest.skip("no strings on heap yet")
     addr = strs[0]["address"] if isinstance(strs[0], dict) else strs[0]
@@ -96,14 +124,14 @@ def test_heap_read_string(live_agent):
 def test_pause_and_list_threads(live_agent):
     live_agent.call_json("live_session_pause")
     live_agent.call_json("live_wait_paused", {"timeoutMs": 3000})
-    threads = live_agent.call_json("live_thread_list")
-    assert isinstance(threads, list) and len(threads) >= 1
+    threads = _items(live_agent.call_json("live_thread_list"))
+    assert len(threads) >= 1
     live_agent.call_json("live_session_go")
 
 
 def test_list_modules(live_agent):
-    mods = live_agent.call_json("live_list_modules")
-    assert isinstance(mods, list) and len(mods) >= 1
+    mods = _items(live_agent.call_json("live_list_modules"))
+    assert len(mods) >= 1
     assert any("dnspymcptest" in (m.get("path") or m.get("name") or "").lower() for m in mods)
 
 
@@ -114,14 +142,15 @@ def test_bp_set_by_name_and_list(live_agent):
         "methodName": "Add",
     })
     assert r is not None
-    bps = live_agent.call_json("live_bp_list")
-    assert isinstance(bps, list) and len(bps) >= 1
+    bps = _items(live_agent.call_json("live_bp_list"))
+    assert len(bps) >= 1
 
 
 def test_step_in_out(live_agent):
     live_agent.call_json("live_session_pause")
     live_agent.call_json("live_wait_paused", {"timeoutMs": 3000})
     live_agent.call_json("live_step_in", {"timeoutMs": 2000})
+    live_agent.call_json("live_wait_paused", {"timeoutMs": 3000})
     live_agent.call_json("live_step_out", {"timeoutMs": 2000})
     live_agent.call_json("live_session_go")
 
@@ -133,10 +162,10 @@ def test_memory_roundtrip(live_agent):
     live_agent.call_json("live_session_pause")
     live_agent.call_json("live_wait_paused", {"timeoutMs": 3000})
     try:
-        threads = live_agent.call_json("live_thread_list")
+        threads = _items(live_agent.call_json("live_thread_list"))
         assert threads, "no threads while paused"
         tid = threads[0]["uniqueId"]
-        stk = live_agent.call_json("live_thread_stack", {"threadId": tid, "max": 1})
+        stk = _items(live_agent.call_json("live_thread_stack", {"threadId": tid, "max": 1}))
         assert stk, "empty stack while paused"
         addr = stk[0].get("stackStart")
         assert addr, "no stackStart in frame"

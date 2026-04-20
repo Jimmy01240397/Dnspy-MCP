@@ -1,3 +1,5 @@
+using System.Text.Json.Nodes;
+
 namespace DnSpyMcp.Services;
 
 /// <summary>
@@ -40,6 +42,57 @@ internal static class Paging
                 ? $"truncated: {page.Count} of {total} rows returned; pass offset={end} to continue"
                 : null,
             items = page,
+        };
+    }
+
+    /// <summary>
+    /// Same as <see cref="Page{T}"/> but for an already-deserialized JsonNode
+    /// returned by an agent RPC. Used by LIVE tools whose agent handlers return
+    /// a raw JSON array — wraps it in the standard pagination envelope so the
+    /// caller never gets an unbounded list back.
+    /// </summary>
+    public static object PageJsonArray(JsonNode? node, int offset, int max)
+    {
+        if (offset < 0) offset = 0;
+        if (max <= 0) max = DefaultMaxRows;
+        if (max > HardMaxRows) max = HardMaxRows;
+
+        if (node is not JsonArray arr)
+        {
+            // Not a list — return as-is wrapped so the caller can still see it.
+            return new
+            {
+                total = node == null ? 0 : 1,
+                offset = 0,
+                returned = node == null ? 0 : 1,
+                truncated = false,
+                nextOffset = (int?)null,
+                hint = (string?)null,
+                items = node,
+            };
+        }
+
+        var total = arr.Count;
+        var taken = new JsonArray();
+        var end = System.Math.Min(offset + max, total);
+        for (int i = offset; i < end; i++)
+        {
+            var item = arr[i];
+            arr[i] = null;          // detach from original parent
+            taken.Add(item);
+        }
+        var truncated = end < total;
+        return new
+        {
+            total,
+            offset,
+            returned = taken.Count,
+            truncated,
+            nextOffset = truncated ? (int?)end : null,
+            hint = truncated
+                ? $"truncated: {taken.Count} of {total} rows returned; pass offset={end} to continue"
+                : null,
+            items = taken,
         };
     }
 
