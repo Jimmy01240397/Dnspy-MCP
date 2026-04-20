@@ -31,7 +31,8 @@ internal static class Program
         RegisterShared(builder.Services, cli);
         builder.Services.AddMcpServer()
             .WithStdioServerTransport()
-            .WithToolsFromAssembly();
+            .WithToolsFromAssembly()
+            .WithRequestFilters(f => f.AddCallToolFilter(ToolErrorFilter.Wrap));
         builder.Build().Run();
         return 0;
     }
@@ -43,7 +44,8 @@ internal static class Program
         RegisterShared(builder.Services, cli);
         builder.Services.AddMcpServer()
             .WithHttpTransport()
-            .WithToolsFromAssembly();
+            .WithToolsFromAssembly()
+            .WithRequestFilters(f => f.AddCallToolFilter(ToolErrorFilter.Wrap));
         var app = builder.Build();
         app.MapMcp(cli.McpPath);
         app.Urls.Add($"http://{cli.BindHost}:{cli.BindPort}");
@@ -59,7 +61,8 @@ internal static class Program
         RegisterShared(builder.Services, cli);
         builder.Services.AddMcpServer()
             .WithHttpTransport(o => { })
-            .WithToolsFromAssembly();
+            .WithToolsFromAssembly()
+            .WithRequestFilters(f => f.AddCallToolFilter(ToolErrorFilter.Wrap));
         var app = builder.Build();
         app.MapMcp(cli.McpPath);
         app.Urls.Add($"http://{cli.BindHost}:{cli.BindPort}");

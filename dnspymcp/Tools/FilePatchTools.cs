@@ -19,7 +19,6 @@ public static class FilePatchTools
     [Description("[FILE] Replace a range of IL instructions with nops and save to outputPath. Params: typeFullName, methodName, startOffset, endOffset (inclusive), outputPath, asmPath (optional), overloadIndex=0.")]
     public static object PatchIlNop(Workspace ws, string typeFullName, string methodName,
                                     int startOffset, int endOffset, string outputPath, string? asmPath = null, int overloadIndex = 0)
-        => ToolGuard.Run(() =>
     {
         var a = ws.Get(asmPath);
         var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
@@ -39,12 +38,12 @@ public static class FilePatchTools
             }
         }
         a.Module.Write(outputPath);
-        return (object)new { changedInstructions = changed, written = outputPath };
-    });
+        return new { changedInstructions = changed, written = outputPath };
+    }
 
     [McpServerTool(Name = "file_patch_bytes")]
     [Description("[FILE] Overwrite raw file bytes at a given file offset. Params: filePath (any binary), offset:long, hex:string. Returns {written}.")]
-    public static object PatchBytes(string filePath, long offset, string hex) => ToolGuard.Run(() =>
+    public static object PatchBytes(string filePath, long offset, string hex)
     {
         hex = hex.Replace(" ", "").Replace("\n", "").Replace("\r", "");
         if ((hex.Length & 1) != 0) throw new McpException("hex must be even length");
@@ -54,15 +53,15 @@ public static class FilePatchTools
         using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Write, FileShare.Read);
         fs.Seek(offset, SeekOrigin.Begin);
         fs.Write(data, 0, data.Length);
-        return (object)new { written = data.Length, filePath, offset };
-    });
+        return new { written = data.Length, filePath, offset };
+    }
 
     [McpServerTool(Name = "file_save_assembly")]
     [Description("[FILE] Write the in-memory ModuleDef (with your patches) back to a new path. Params: outputPath, asmPath (optional).")]
-    public static object SaveAssembly(Workspace ws, string outputPath, string? asmPath = null) => ToolGuard.Run(() =>
+    public static object SaveAssembly(Workspace ws, string outputPath, string? asmPath = null)
     {
         var a = ws.Get(asmPath);
         a.Module.Write(outputPath);
-        return (object)new { written = outputPath };
-    });
+        return new { written = outputPath };
+    }
 }
