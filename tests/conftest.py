@@ -92,12 +92,16 @@ def testtarget_pid() -> int:
 
 @pytest.fixture(scope="session")
 def agent_proc(testtarget_pid: int):
+    # Note: testtarget_pid is required as a session dep so dnspymcptest.exe is
+    # alive before the agent comes up — but the agent is no longer started
+    # with --attach. Live attach is driven from MCP via debug_pid_attach (see
+    # the live_agent fixture). The CLI flag was removed in favour of runtime
+    # control so a single agent can attach/detach across multiple targets.
     _require_binary(AGENT_EXE, "dnspymcpagent.exe")
     cmd = [
         str(AGENT_EXE),
         "--host", AGENT_HOST,
         "--port", str(AGENT_PORT),
-        "--attach", str(testtarget_pid),
     ]
     p = _spawn(cmd, cwd=AGENT_EXE.parent, log_name="agent")
     try:
@@ -162,9 +166,17 @@ def testtarget_asm() -> Path:
 
 
 @pytest.fixture(scope="session")
-def live_agent(mcp: MCPClient):
-    """Ensure the MCP server is connected to the agent. Returns the mcp client."""
+def live_agent(mcp: MCPClient, testtarget_pid: int):
+    """MCP client with an agent connected AND attached to the test target.
+
+    Two phases (since the agent no longer auto-attaches at boot):
+      1. debug_session_connect   — TCP-link the MCP to the agent
+      2. debug_pid_attach        — runtime attach to the testtarget pid
+    """
     r = mcp.call("debug_session_connect", {"host": AGENT_HOST, "port": AGENT_PORT})
     if not r["ok"]:
         pytest.skip(f"agent open failed: {r['text']}")
+    a = mcp.call("debug_pid_attach", {"pid": testtarget_pid})
+    if not a["ok"]:
+        pytest.skip(f"debug_pid_attach failed: {a['text']}")
     return mcp

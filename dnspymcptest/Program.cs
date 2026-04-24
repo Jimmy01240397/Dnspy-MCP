@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 
 namespace DnSpyMcp.TestTarget;
@@ -50,6 +51,11 @@ internal static class Program
     }
 
     private static int Add(int a, int b) => a + b;
+
+    // Overloads — used by reverse_list_overloads / signature-selection tests.
+    public static string Greet(string name) => $"hi {name}";
+    public static string Greet(string name, int times) => string.Concat(Enumerable.Repeat($"hi {name} ", times));
+    public static string Greet(string greeting, string name) => $"{greeting}, {name}";
 
     private static int Multiply(int a, int b)
     {

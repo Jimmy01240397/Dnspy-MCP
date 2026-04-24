@@ -152,37 +152,159 @@ public static class AsmFileTools
     }
 
     [McpServerTool(Name = "reverse_decompile_method")]
-    [Description("[REVERSE] Decompile a single method to C# (truncatable). Params: typeFullName, methodName, asmPath (optional), overloadIndex=0, offsetChars=0, maxChars=64000.")]
+    [Description("[REVERSE] Decompile a single method to C# (truncatable). Overload selection: pass `signature` (e.g. \"(System.String,System.Int32)\" — lenient, also accepts shorthand like \"(string,int)\"); OR pass `overloadIndex` (zero-based). When neither is given and the method has multiple overloads, the call fails with a list of available signatures. Use `reverse_list_overloads` to enumerate. Params: typeFullName, methodName, asmPath (optional), signature (optional), overloadIndex (optional), offsetChars=0, maxChars=64000.")]
     public static object DecompileMethod(Workspace ws, string typeFullName, string methodName,
-                                         string? asmPath = null, int overloadIndex = 0,
+                                         string? asmPath = null, string? signature = null, int? overloadIndex = null,
                                          int offsetChars = 0, int maxChars = 64_000)
     {
         var a = ws.Get(asmPath);
-        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
-        var overloads = t.Methods.Where(m => m.Name == methodName).ToList();
-        if (overloads.Count == 0) throw new McpException($"method not found: {typeFullName}::{methodName}");
-        if (overloadIndex < 0 || overloadIndex >= overloads.Count) throw new McpException($"overloadIndex out of range (have {overloads.Count})");
-        var m = overloads[overloadIndex];
+        var m = ResolveOverload(a.Module, typeFullName, methodName, signature, overloadIndex);
         var handle = MetadataTokens.MethodDefinitionHandle((int)m.MDToken.Rid);
         var full = a.Decompiler.DecompileAsString(handle);
         return Paging.ClampText(full, offsetChars, maxChars);
     }
 
     [McpServerTool(Name = "reverse_il_method")]
-    [Description("[REVERSE] Return raw IL for a method (paginated by instruction). Params: typeFullName, methodName, asmPath (optional), overloadIndex=0, offset=0, max=500.")]
+    [Description("[REVERSE] Return raw IL for a method (paginated by instruction). Overload selection: see reverse_decompile_method. Params: typeFullName, methodName, asmPath (optional), signature (optional), overloadIndex (optional), offset=0, max=500.")]
     public static object IlMethod(Workspace ws, string typeFullName, string methodName,
-                                  string? asmPath = null, int overloadIndex = 0,
+                                  string? asmPath = null, string? signature = null, int? overloadIndex = null,
                                   int offset = 0, int max = 200)
     {
         var a = ws.Get(asmPath);
-        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
-        var overloads = t.Methods.Where(m => m.Name == methodName).ToList();
-        if (overloads.Count == 0) throw new McpException($"method not found: {typeFullName}::{methodName}");
-        if (overloadIndex < 0 || overloadIndex >= overloads.Count) throw new McpException($"overloadIndex out of range");
-        var m = overloads[overloadIndex];
+        var m = ResolveOverload(a.Module, typeFullName, methodName, signature, overloadIndex);
         if (!m.HasBody) return new { total = 0, offset, returned = 0, truncated = false, items = Array.Empty<object>() };
         var rows = m.Body.Instructions.Select(i => new { offset = i.Offset, opCode = i.OpCode.Name, operand = i.Operand?.ToString() });
         return Paging.Page(rows, offset, max);
+    }
+
+    [McpServerTool(Name = "reverse_list_overloads")]
+    [Description("[REVERSE] Enumerate every overload of methodName on typeFullName. Each row gives the index, full signature, parameter list, return type, and metadata token — feed them back as `overloadIndex` or `signature` to reverse_decompile_method / reverse_il_method. Params: typeFullName, methodName, asmPath (optional), offset=0, max=200.")]
+    public static object ListOverloads(Workspace ws, string typeFullName, string methodName,
+                                       string? asmPath = null, int offset = 0, int max = 200)
+    {
+        var a = ws.Get(asmPath);
+        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var overloads = t.Methods.Where(mm => mm.Name == methodName).ToList();
+        if (overloads.Count == 0) throw new McpException($"method not found: {typeFullName}::{methodName}");
+        var rows = overloads.Select((m, i) => new
+        {
+            index = i,
+            fullName = m.FullName,
+            signature = ParamSignature(m),
+            parameters = m.Parameters.Where(p => p.IsNormalMethodParameter).Select(p => new { name = p.Name, type = p.Type?.FullName }).ToArray(),
+            returnType = m.ReturnType?.FullName,
+            token = m.MDToken.Raw,
+            isStatic = m.IsStatic,
+        });
+        return Paging.Page(rows, offset, max);
+    }
+
+    // Resolve a method by name + optional signature/overloadIndex. Signature
+    // matching is lenient: full "(System.String,System.Int32)" wins, but
+    // shorthand like "(string,int)" also matches by basename. When ambiguous
+    // and no selector given, the error lists every available signature so the
+    // caller can re-issue with overloadIndex or signature.
+    private static MethodDef ResolveOverload(ModuleDef module, string typeFullName, string methodName,
+                                             string? signature, int? overloadIndex)
+    {
+        var t = module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var overloads = t.Methods.Where(m => m.Name == methodName).ToList();
+        if (overloads.Count == 0)
+            throw new McpException($"method not found: {typeFullName}::{methodName}");
+
+        if (overloadIndex.HasValue)
+        {
+            if (signature != null)
+                throw new McpException("pass either signature or overloadIndex, not both");
+            int idx = overloadIndex.Value;
+            if (idx < 0 || idx >= overloads.Count)
+                throw new McpException($"overloadIndex out of range (have {overloads.Count})");
+            return overloads[idx];
+        }
+
+        if (signature != null)
+        {
+            var matches = overloads.Where(m => SignatureMatches(m, signature)).ToList();
+            if (matches.Count == 0)
+                throw AmbiguityError(typeFullName, methodName, overloads, $"signature '{signature}' did not match any overload");
+            if (matches.Count > 1)
+                throw AmbiguityError(typeFullName, methodName, matches, $"signature '{signature}' matched {matches.Count} overloads (be more specific)");
+            return matches[0];
+        }
+
+        if (overloads.Count == 1) return overloads[0];
+        throw AmbiguityError(typeFullName, methodName, overloads, $"{overloads.Count} overloads — pass `signature` or `overloadIndex`");
+    }
+
+    private static McpException AmbiguityError(string typeFullName, string methodName, IList<MethodDef> overloads, string reason)
+    {
+        var lines = overloads.Select((m, i) => $"  [{i}] {ParamSignature(m)}");
+        return new McpException(
+            $"{typeFullName}::{methodName} — {reason}.\nAvailable:\n" + string.Join("\n", lines));
+    }
+
+    private static bool SignatureMatches(MethodDef m, string signature)
+    {
+        var sig = NormalizeParams(signature);
+        var have = ParamList(m);
+        if (sig.SequenceEqual(have, StringComparer.Ordinal)) return true;
+        // Lenient: compare by short name only (last "." segment, strip generic
+        // arity). Lets callers pass "string" / "int" instead of fully qualified.
+        var shortHave = have.Select(ShortTypeName).ToArray();
+        var shortSig = sig.Select(ShortTypeName).ToArray();
+        return shortSig.SequenceEqual(shortHave, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string[] ParamList(MethodDef m)
+        => m.Parameters.Where(p => p.IsNormalMethodParameter)
+            .Select(p => p.Type?.FullName ?? "")
+            .ToArray();
+
+    private static string ParamSignature(MethodDef m)
+    {
+        var ret = m.ReturnType?.FullName ?? "void";
+        var ps = string.Join(",", ParamList(m));
+        return $"{ret} {m.Name}({ps})";
+    }
+
+    private static string[] NormalizeParams(string signature)
+    {
+        var s = signature.Trim();
+        // Accept "(a,b)" or "a,b". Strip outer parens.
+        if (s.StartsWith("(") && s.EndsWith(")")) s = s[1..^1];
+        if (string.IsNullOrWhiteSpace(s)) return Array.Empty<string>();
+        return s.Split(',').Select(p => p.Trim()).ToArray();
+    }
+
+    private static string ShortTypeName(string fullName)
+    {
+        var s = fullName;
+        // strip backtick generic arity
+        var tick = s.IndexOf('`');
+        if (tick >= 0) s = s[..tick];
+        var dot = s.LastIndexOf('.');
+        if (dot >= 0) s = s[(dot + 1)..];
+        // canonical aliases (System.String -> String -> string)
+        return s switch
+        {
+            "String" => "string",
+            "Int32" => "int",
+            "Int64" => "long",
+            "UInt32" => "uint",
+            "UInt64" => "ulong",
+            "Int16" => "short",
+            "UInt16" => "ushort",
+            "Byte" => "byte",
+            "SByte" => "sbyte",
+            "Boolean" => "bool",
+            "Char" => "char",
+            "Single" => "float",
+            "Double" => "double",
+            "Decimal" => "decimal",
+            "Object" => "object",
+            "Void" => "void",
+            _ => s.ToLowerInvariant(),
+        };
     }
 
     [McpServerTool(Name = "reverse_il_method_by_token")]

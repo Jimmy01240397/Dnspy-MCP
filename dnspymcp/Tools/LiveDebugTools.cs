@@ -139,11 +139,25 @@ public static class LiveDebugTools
         => Paging.PageJsonArray(reg.Get(agent).Result("thread.list"), offset, max);
 
     [McpServerTool(Name = "debug_thread_stack")]
-    [Description("[DEBUG] Walk a thread's managed call stack (paginated). Params: threadId:int, offset=0, max=200. Agent walks up to (offset+max); MCP slices to envelope.")]
-    public static object ThreadStack(AgentRegistry reg, int threadId, int offset = 0, int max = 200, string? agent = null)
+    [Description("[DEBUG] Walk a thread's managed call stack (paginated). Identify the thread with EITHER uniqueId (debugger-assigned, from debug_thread_list) OR osThreadId (OS thread id). Legacy alias: threadId == uniqueId. Params: uniqueId?:int, osThreadId?:int, threadId?:int, offset=0, max=200.")]
+    public static object ThreadStack(AgentRegistry reg, int? uniqueId = null, int? osThreadId = null, int? threadId = null, int offset = 0, int max = 200, string? agent = null)
     {
+        // threadId is a legacy alias for uniqueId. If both given, they must agree.
+        if (threadId is int leg)
+        {
+            if (uniqueId is int u && u != leg)
+                throw new McpException("threadId and uniqueId disagree; pass only one.");
+            uniqueId ??= leg;
+        }
+        int provided = (uniqueId.HasValue ? 1 : 0) + (osThreadId.HasValue ? 1 : 0);
+        if (provided == 0) throw new McpException("supply uniqueId or osThreadId.");
+        if (provided == 2) throw new McpException("pass exactly one of uniqueId / osThreadId.");
+
         var fetch = System.Math.Max(1, offset + System.Math.Min(max, Paging.HardMaxRows));
-        return Paging.PageJsonArray(reg.Get(agent).Result("thread.stack", new { threadId, max = fetch }), offset, max);
+        var payload = uniqueId.HasValue
+            ? (object)new { uniqueId = uniqueId.Value, max = fetch }
+            : new { osThreadId = osThreadId!.Value, max = fetch };
+        return Paging.PageJsonArray(reg.Get(agent).Result("thread.stack", payload), offset, max);
     }
 
     [McpServerTool(Name = "debug_thread_current")]
@@ -154,9 +168,9 @@ public static class LiveDebugTools
     // ---- modules --------------------------------------------------------
 
     [McpServerTool(Name = "debug_list_modules")]
-    [Description("[DEBUG] List managed modules currently loaded in the attached process (paginated). Params: offset=0, max=200.")]
-    public static object ListModules(AgentRegistry reg, int offset = 0, int max = 200, string? agent = null)
-        => Paging.PageJsonArray(reg.Get(agent).Result("module.list_live"), offset, max);
+    [Description("[DEBUG] List managed modules currently loaded in the attached process (paginated). Default rows: {shortName, name, address}. Pass verbose=true to also get {appDomain, assembly, size, isDynamic, isInMemory}. Params: offset=0, max=200, verbose=false.")]
+    public static object ListModules(AgentRegistry reg, int offset = 0, int max = 200, bool verbose = false, string? agent = null)
+        => Paging.PageJsonArray(reg.Get(agent).Result("module.list_live", new { verbose }), offset, max);
 
     [McpServerTool(Name = "debug_find_type")]
     [Description("[DEBUG] Find a type by full name across all loaded modules (paginated). Returns module path + typeDef token. Params: typeFullName, offset=0, max=200.")]

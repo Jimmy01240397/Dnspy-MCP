@@ -109,6 +109,13 @@ Write-Host "==> building dnspymcpagent (net48)"
 & dotnet build (Join-Path $root 'dnspymcpagent/dnspymcpagent.csproj') -c $Configuration -o (Join-Path $distDir 'dnspymcpagent')
 if ($LASTEXITCODE -ne 0) { throw "dnspymcpagent build failed" }
 
+# dnspymcptest is the integration test target: an idle .NET process the test
+# fixture spawns and the agent attaches to. Built unconditionally Debug so
+# pytest always sees the latest type/method shape.
+Write-Host "==> building dnspymcptest (net48 Debug)"
+& dotnet build (Join-Path $root 'dnspymcptest/dnspymcptest.csproj') -c Debug -v minimal
+if ($LASTEXITCODE -ne 0) { throw "dnspymcptest build failed" }
+
 # ---------- 4. stage docs into each component -----------------------------
 # Each zip is self-contained, so README + LICENSE land in both.
 $docs = @('README.md','LICENSE') | ForEach-Object { Join-Path $root $_ } | Where-Object { Test-Path $_ }

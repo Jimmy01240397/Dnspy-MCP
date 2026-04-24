@@ -11,9 +11,10 @@ public static class ModuleHandlers
     public static void Register(Dispatcher d)
     {
         d.Register("module.list_live",
-            "[LIVE] Enumerate managed modules loaded in the attached process (via dndbg, real CLR view).",
-            _ => Program.Session.OnDbg(() =>
+            "[LIVE] Enumerate managed modules loaded in the attached process (via dndbg, real CLR view). Params: {verbose?:bool=false}. Default rows: {shortName, name, address}. verbose=true also returns {appDomain, assembly, size, isDynamic, isInMemory}.",
+            p => Program.Session.OnDbg(() =>
             {
+                bool verbose = Dispatcher.Opt<bool>(p, "verbose", false);
                 var dbg = Program.Session.DnDebugger;
                 var rows = new List<object>();
                 foreach (var proc in dbg.Processes)
@@ -21,17 +22,29 @@ public static class ModuleHandlers
                         foreach (var asm in ad.Assemblies)
                             foreach (var mod in asm.Modules)
                             {
-                                rows.Add(new
+                                if (verbose)
                                 {
-                                    appDomain = ad.Name,
-                                    assembly = asm.FullName,
-                                    name = mod.Name,
-                                    shortName = Path.GetFileName(mod.Name),
-                                    address = (long)mod.Address,
-                                    size = mod.Size,
-                                    isDynamic = mod.IsDynamic,
-                                    isInMemory = mod.IsInMemory,
-                                });
+                                    rows.Add(new
+                                    {
+                                        shortName = Path.GetFileName(mod.Name),
+                                        name = mod.Name,
+                                        address = (long)mod.Address,
+                                        appDomain = ad.Name,
+                                        assembly = asm.FullName,
+                                        size = mod.Size,
+                                        isDynamic = mod.IsDynamic,
+                                        isInMemory = mod.IsInMemory,
+                                    });
+                                }
+                                else
+                                {
+                                    rows.Add(new
+                                    {
+                                        shortName = Path.GetFileName(mod.Name),
+                                        name = mod.Name,
+                                        address = (long)mod.Address,
+                                    });
+                                }
                             }
                 return rows;
             }));

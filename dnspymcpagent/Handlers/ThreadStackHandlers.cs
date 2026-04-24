@@ -35,18 +35,37 @@ public static class ThreadStackHandlers
             }));
 
         d.Register("thread.stack",
-            "[LIVE] Return the managed call stack for a given thread uniqueId. Params: {threadId:int, max?:int=32}.",
+            "[LIVE] Return the managed call stack for a thread. Identify the thread with EITHER uniqueId (debugger-assigned) OR osThreadId. Legacy alias: threadId == uniqueId. Params: {uniqueId?:int, osThreadId?:int, threadId?:int, max?:int=32}.",
             p => Program.Session.OnDbg(() =>
             {
-                var threadId = Dispatcher.Req<int>(p, "threadId");
+                int? uniqueId = p != null && p.TryGetValue("uniqueId", System.StringComparison.OrdinalIgnoreCase, out var uTok) && uTok.Type != JTokenType.Null
+                    ? uTok.ToObject<int>()
+                    : (int?)null;
+                int? osThreadId = p != null && p.TryGetValue("osThreadId", System.StringComparison.OrdinalIgnoreCase, out var oTok) && oTok.Type != JTokenType.Null
+                    ? oTok.ToObject<int>()
+                    : (int?)null;
+                if (!uniqueId.HasValue && p != null && p.TryGetValue("threadId", System.StringComparison.OrdinalIgnoreCase, out var lTok) && lTok.Type != JTokenType.Null)
+                    uniqueId = lTok.ToObject<int>();
+
+                int provided = (uniqueId.HasValue ? 1 : 0) + (osThreadId.HasValue ? 1 : 0);
+                if (provided == 0) throw new System.ArgumentException("supply uniqueId or osThreadId");
+                if (provided == 2) throw new System.ArgumentException("pass exactly one of uniqueId / osThreadId");
+
                 var max = Dispatcher.Opt<int>(p, "max", 32);
                 var dbg = Program.Session.DnDebugger;
 
                 DnThread? target = null;
                 foreach (var proc in dbg.Processes)
                     foreach (var t in proc.Threads)
-                        if (t.UniqueId == threadId) { target = t; break; }
-                if (target == null) throw new System.ArgumentException($"thread {threadId} not found");
+                    {
+                        bool match = uniqueId.HasValue ? t.UniqueId == uniqueId.Value : t.ThreadId == osThreadId!.Value;
+                        if (match) { target = t; break; }
+                    }
+                if (target == null)
+                {
+                    var label = uniqueId.HasValue ? $"uniqueId={uniqueId.Value}" : $"osThreadId={osThreadId!.Value}";
+                    throw new System.ArgumentException($"thread {label} not found");
+                }
 
                 var frames = new List<object>();
                 int idx = 0;

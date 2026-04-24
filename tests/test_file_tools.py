@@ -107,6 +107,68 @@ def test_reverse_il_method(mcp, asm):
     assert any(i["opCode"] == "ret" for i in items)
 
 
+def test_reverse_list_overloads(mcp, asm):
+    r = mcp.call_json("reverse_list_overloads",
+                      {"asmPath": asm,
+                       "typeFullName": "DnSpyMcp.TestTarget.Program",
+                       "methodName": "Greet"})
+    items = r["items"]
+    assert len(items) == 3, f"expected 3 Greet overloads, got {len(items)}"
+    sigs = [it["signature"] for it in items]
+    # one-arg(string), two-arg(string,int), two-arg(string,string)
+    assert any("(System.String)" in s for s in sigs)
+    assert any("(System.String,System.Int32)" in s for s in sigs)
+    assert any("(System.String,System.String)" in s for s in sigs)
+
+
+def test_reverse_decompile_method_signature_select(mcp, asm):
+    # signature-based selection picks the right overload
+    r = mcp.call_json("reverse_decompile_method",
+                      {"asmPath": asm,
+                       "typeFullName": "DnSpyMcp.TestTarget.Program",
+                       "methodName": "Greet",
+                       "signature": "(string,int)"})
+    text = r["text"]
+    # Two-arg (string,int) overload uses Repeat / Concat
+    assert "Repeat" in text or "Concat" in text or "times" in text
+
+
+def test_reverse_decompile_method_overload_index(mcp, asm):
+    overloads = mcp.call_json("reverse_list_overloads",
+                              {"asmPath": asm,
+                               "typeFullName": "DnSpyMcp.TestTarget.Program",
+                               "methodName": "Greet"})["items"]
+    target = next(o for o in overloads if "(System.String,System.String)" in o["signature"])
+    r = mcp.call_json("reverse_decompile_method",
+                      {"asmPath": asm,
+                       "typeFullName": "DnSpyMcp.TestTarget.Program",
+                       "methodName": "Greet",
+                       "overloadIndex": target["index"]})
+    # The 2-string overload references the `greeting` parameter
+    assert "greeting" in r["text"]
+
+
+def test_reverse_decompile_method_ambiguous_errors(mcp, asm):
+    # No selector + multiple overloads → structured error listing them
+    r = mcp.call("reverse_decompile_method",
+                 {"asmPath": asm,
+                  "typeFullName": "DnSpyMcp.TestTarget.Program",
+                  "methodName": "Greet"})
+    assert not r["ok"], "expected error for ambiguous overload"
+    assert "overloads" in r["text"] or "signature" in r["text"]
+    # Available list should be embedded
+    assert "(System.String)" in r["text"]
+
+
+def test_reverse_decompile_method_single_overload_no_selector(mcp, asm):
+    # Add has only one overload — both signature-less and overloadIndex=None must succeed.
+    r = mcp.call_json("reverse_decompile_method",
+                      {"asmPath": asm,
+                       "typeFullName": "DnSpyMcp.TestTarget.Program",
+                       "methodName": "Add"})
+    assert "Add" in r["text"]
+
+
 def test_reverse_il_method_by_token(mcp, asm):
     methods = mcp.call_json("reverse_list_methods",
                             {"asmPath": asm, "typeFullName": "DnSpyMcp.TestTarget.Program"})["items"]

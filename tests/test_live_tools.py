@@ -140,6 +140,18 @@ def test_list_modules(live_agent):
     mods = _items(live_agent.call_json("debug_list_modules"))
     assert len(mods) >= 1
     assert any("dnspymcptest" in (m.get("path") or m.get("name") or "").lower() for m in mods)
+    # Default schema is the slim view: shortName + name + address only.
+    sample = mods[0]
+    assert set(sample.keys()) == {"shortName", "name", "address"}, f"unexpected slim schema: {sample}"
+
+
+def test_list_modules_verbose(live_agent):
+    mods = _items(live_agent.call_json("debug_list_modules", {"verbose": True}))
+    assert len(mods) >= 1
+    sample = mods[0]
+    # Verbose schema: slim fields plus 5 extras (appDomain/assembly/size/isDynamic/isInMemory).
+    expected = {"shortName", "name", "address", "appDomain", "assembly", "size", "isDynamic", "isInMemory"}
+    assert set(sample.keys()) == expected, f"unexpected verbose schema: {sample}"
 
 
 def test_bp_set_by_name_and_list(live_agent):
@@ -178,6 +190,41 @@ def test_memory_roundtrip(live_agent):
         assert addr, "no stackStart in frame"
         data = live_agent.call_json("debug_memory_read", {"address": int(addr), "size": 1})
         live_agent.call_json("debug_memory_write", {"address": int(addr), "hex": data["hex"]})
+    finally:
+        live_agent.call_json("debug_go")
+
+
+def test_thread_stack_id_aliases(live_agent):
+    # debug_thread_stack must accept uniqueId, osThreadId, and the legacy
+    # threadId alias and produce the same stack for the same thread.
+    live_agent.call_json("debug_pause")
+    live_agent.call_json("debug_wait_paused", {"timeoutMs": 3000})
+    try:
+        threads = _items(live_agent.call_json("debug_thread_list"))
+        assert threads, "no threads while paused"
+        # pick the first thread that has a non-zero osThreadId so we can
+        # round-trip both fields.
+        sel = next((t for t in threads if t.get("osThreadId")), threads[0])
+        u, o = sel["uniqueId"], sel["osThreadId"]
+
+        s_unique = _items(live_agent.call_json("debug_thread_stack", {"uniqueId": u, "max": 1}))
+        s_legacy = _items(live_agent.call_json("debug_thread_stack", {"threadId": u, "max": 1}))
+        s_os = _items(live_agent.call_json("debug_thread_stack", {"osThreadId": o, "max": 1}))
+        assert s_unique == s_legacy, "uniqueId vs legacy threadId disagree"
+        assert s_unique == s_os, "uniqueId vs osThreadId disagree"
+    finally:
+        live_agent.call_json("debug_go")
+
+
+def test_thread_stack_id_validation(live_agent):
+    # Missing both ids must error; passing both must error.
+    live_agent.call_json("debug_pause")
+    live_agent.call_json("debug_wait_paused", {"timeoutMs": 3000})
+    try:
+        r = live_agent.call("debug_thread_stack", {"max": 1})
+        assert not r["ok"], f"expected error when no id supplied, got {r}"
+        r = live_agent.call("debug_thread_stack", {"uniqueId": 1, "osThreadId": 2, "max": 1})
+        assert not r["ok"], f"expected error when both ids supplied, got {r}"
     finally:
         live_agent.call_json("debug_go")
 
