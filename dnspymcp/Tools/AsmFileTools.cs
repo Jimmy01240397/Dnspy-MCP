@@ -3,8 +3,11 @@ using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using DnSpyMcp.Services;
 using dnlib.DotNet;
+using dnlib.DotNet.Emit;
+using dnSpy.Analyzer.TreeNodes;
 using ICSharpCode.Decompiler.TypeSystem;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
@@ -90,6 +93,55 @@ public static class AsmFileTools
         return Paging.Page(rows, offset, max);
     }
 
+    [McpServerTool(Name = "reverse_list_references")]
+    [Description("[REVERSE] List the assembly references declared by an opened module's manifest, marking which are currently opened in the workspace and which are still missing. Use this BEFORE reverse_xref_to_method on a target whose callers might live in dependent assemblies — open the missing ones first so the cross-DLL scan actually has them in scope. Each row: {name, version, publicKeyToken (hex), culture, opened (bool), openedAsmPath?}. Params: asmPath (optional, defaults to active session), onlyMissing=false, offset=0, max=100.")]
+    public static object ListReferences(Workspace ws, string? asmPath = null, bool onlyMissing = false, int offset = 0, int max = 100)
+    {
+        var a = ws.Get(asmPath);
+        // Pre-build a name->path lookup of what's opened. dnlib AssemblyRef
+        // matching is by simple name; version-strict matching is rarely what
+        // RE callers want (you usually have one version of mscorlib and want
+        // it counted regardless of declared rev).
+        var openedByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var o in ws.All)
+        {
+            var name = o.Module.Assembly?.Name.String;
+            if (!string.IsNullOrEmpty(name) && !openedByName.ContainsKey(name))
+                openedByName[name] = o.Path;
+        }
+
+        var rows = a.Module.GetAssemblyRefs()
+            .Select(r =>
+            {
+                var name = r.Name.String;
+                bool opened = openedByName.TryGetValue(name, out var openPath);
+                return new
+                {
+                    name,
+                    version = r.Version?.ToString(),
+                    publicKeyToken = FormatPublicKeyToken(r.PublicKeyOrToken),
+                    culture = string.IsNullOrEmpty(r.Culture?.String) ? null : r.Culture.String,
+                    opened,
+                    openedAsmPath = opened ? openPath : null,
+                };
+            })
+            .Where(row => !onlyMissing || !row.opened);
+        return Paging.Page(rows, offset, max);
+    }
+
+    private static string? FormatPublicKeyToken(PublicKeyBase? pk)
+    {
+        if (pk is null) return null;
+        // PublicKey full form is large — collapse to its 8-byte token for
+        // display (matches how AssemblyRef strings appear in IL listings).
+        var tok = pk is PublicKey full ? full.Token : pk as PublicKeyToken;
+        var bytes = tok?.Data;
+        if (bytes is null || bytes.Length == 0) return null;
+        var sb = new StringBuilder(bytes.Length * 2);
+        foreach (var b in bytes) sb.Append(b.ToString("x2"));
+        return sb.ToString();
+    }
+
     [McpServerTool(Name = "reverse_decompile_type")]
     [Description("[REVERSE] Decompile a whole type to C# (truncatable — big types blow up context). Params: typeFullName, asmPath (optional), offsetChars=0, maxChars=64000. Response: {totalChars, offsetChars, returnedChars, truncated, text}.")]
     public static object DecompileType(Workspace ws, string typeFullName, string? asmPath = null, int offsetChars = 0, int maxChars = 32_000)
@@ -169,16 +221,117 @@ public static class AsmFileTools
     }
 
     [McpServerTool(Name = "reverse_xref_to_method")]
-    [Description("[REVERSE] Find all methods that call the given method. Default scope: EVERY currently-opened assembly (cross-DLL). Pass asmPath to limit. targetFullName accepts full signature ('System.Int32 Ns.Type::Method(System.Int32)') OR shorthand 'Ns.Type.Method' (matches any overload). Response rows include the assembly each caller lives in. Paginated. Params: targetFullName, asmPath (optional, defaults to all-opened), offset=0, max=200.")]
+    [Description("[REVERSE] Find all methods that call the given method using dnSpy's ScopedWhereUsedAnalyzer engine (cross-DLL, accessibility-aware: Private/Internal/Public scoping, TypeRef pre-filter, friend-assembly handling, type-equivalence). Scope: every currently-opened assembly. targetFullName accepts full signature ('System.Int32 Ns.Type::Method(System.Int32)') OR shorthand 'Ns.Type.Method' (matches any overload, AND any per-module instance — useful when the same DLL is opened from multiple paths). Response rows include the assembly each caller lives in. Paginated. Params: targetFullName (required), asmPath (optional — if given, only resolve the target method definition within this one asm; scope of caller search still spans all opened asms), offset=0, max=200.")]
     public static object XrefToMethod(Workspace ws, string targetFullName, string? asmPath = null, int offset = 0, int max = 200)
     {
         if (string.IsNullOrEmpty(targetFullName))
             throw new McpException("targetFullName must be non-empty");
-        string? scope = null;
-        if (!string.IsNullOrEmpty(asmPath))
-            scope = ws.Get(asmPath).Path;
-        var rows = ws.Index.XrefToMethod(targetFullName, scope)
-            .Select(s => new { asm = s.AsmPath, from = s.FromMethodFullName, ilOffset = s.IlOffset, opCode = s.OpCode, target = s.TargetFullName });
-        return Paging.Page(rows, offset, max);
+
+        // Resolve EVERY MethodDef matching the input — shorthand may match
+        // multiple overloads (or multiple per-module instances of the same
+        // logical method when the same asm is opened twice). Each is fed to
+        // dnSpy's analyzer; we dedupe callers across analyses.
+        var targets = ResolveMethods(ws, targetFullName, asmPath).ToList();
+        if (targets.Count == 0)
+            throw new McpException($"method not found: {targetFullName}");
+
+        // Drive dnSpy's engine for each resolved target. The engine handles
+        // accessibility scoping / TypeRef pre-filtering / friend assemblies /
+        // parallel module traversal — we only supply the per-type callback.
+        var docService = new WorkspaceDocumentService(ws);
+        var hits = new List<object>();
+        var seen = new HashSet<MethodDef>(MethodDefComparer.Instance);
+        foreach (var targetMethod in targets)
+        {
+            var analyzer = new ScopedWhereUsedAnalyzer<(MethodDef caller, Instruction instr)>(
+                docService, targetMethod,
+                type => FindCallersInType(type, targetMethod));
+            foreach (var (caller, instr) in analyzer.PerformAnalysis(CancellationToken.None))
+            {
+                if (!seen.Add(caller)) continue;
+                var asmPathOut = caller.Module?.Location ?? "";
+                hits.Add(new { asm = asmPathOut, from = caller.FullName, ilOffset = instr.Offset, opCode = instr.OpCode.Name, target = targetMethod.FullName });
+            }
+        }
+        return Paging.Page(hits, offset, max);
+    }
+
+    // Per-type callback for ScopedWhereUsedAnalyzer: find call/callvirt/newobj
+    // to the target method. Uses dnSpy.Analyzer.Helpers + SigComparer-style
+    // logic, exposed via Publicizer. Not duplicated: every analyzer in dnSpy
+    // writes its own per-type callback (MethodUsedBy, TypeUsedBy, FieldAccess
+    // each have different ones) because THIS is the per-query part.
+    private static IEnumerable<(MethodDef caller, Instruction instr)> FindCallersInType(TypeDef type, MethodDef target)
+    {
+        string targetName = target.Name;
+        foreach (var method in type.Methods)
+        {
+            if (!method.HasBody) continue;
+            foreach (var instr in method.Body.Instructions)
+            {
+                if (instr.Operand is dnlib.DotNet.IMethod mr && !mr.IsField && mr.Name == targetName &&
+                    Helpers.IsReferencedBy(target.DeclaringType, mr.DeclaringType) &&
+                    AreSameMethod(mr.ResolveMethodDef(), target))
+                {
+                    yield return (method, instr);
+                    break;  // one hit per caller is enough
+                }
+            }
+        }
+    }
+
+    private static bool AreSameMethod(MethodDef? a, MethodDef? b)
+    {
+        if (a is null || b is null) return false;
+        return a == b || new SigComparer().Equals(a, b);
+    }
+
+    // Look up methods matching either a full signature ('T Ns.Type::M(args)')
+    // or shorthand ('Ns.Type.M' / 'M'). Yields every match — the caller
+    // (xref) feeds each to the analyzer separately, so multiple per-module
+    // instances or multiple overloads under the same shorthand all get
+    // analyzed and the result-set is unioned + deduped.
+    private static IEnumerable<MethodDef> ResolveMethods(Workspace ws, string target, string? onlyAsmPath)
+    {
+        bool isSignature = target.Contains("::");
+        string? declTypeName = null;
+        string? methodName = null;
+        if (!isSignature)
+        {
+            int dot = target.LastIndexOf('.');
+            if (dot > 0)
+            {
+                declTypeName = target.Substring(0, dot);
+                methodName = target.Substring(dot + 1);
+            }
+            else
+            {
+                methodName = target;
+            }
+        }
+
+        IEnumerable<Workspace.OpenedAsm> scope = ws.All;
+        if (!string.IsNullOrEmpty(onlyAsmPath))
+            scope = new[] { ws.Get(onlyAsmPath) };
+
+        foreach (var asm in scope)
+        {
+            foreach (var t in asm.Module.GetTypes())
+            {
+                if (declTypeName != null && t.FullName != declTypeName) continue;
+                foreach (var m in t.Methods)
+                {
+                    if (isSignature ? m.FullName == target : m.Name == methodName)
+                        yield return m;
+                }
+            }
+        }
+    }
+
+    private sealed class MethodDefComparer : IEqualityComparer<MethodDef>
+    {
+        public static readonly MethodDefComparer Instance = new();
+        public bool Equals(MethodDef? x, MethodDef? y) => ReferenceEquals(x, y);
+        public int GetHashCode(MethodDef obj) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
     }
 }

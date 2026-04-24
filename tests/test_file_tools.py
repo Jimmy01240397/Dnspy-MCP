@@ -295,6 +295,30 @@ def test_reverse_open_rejects_duplicate(mcp, testtarget_asm: Path):
     assert "already opened" in msg, f"error must explain; got: {msg!r}"
 
 
+def test_list_references(mcp, asm):
+    """The test target references mscorlib / System.* — every row should have
+    a name + version, and at least one well-known core asm should appear."""
+    r = mcp.call_json("reverse_list_references", {"asmPath": asm})
+    assert r["returned"] >= 1
+    names = {row["name"] for row in r["items"]}
+    # Every .NET asm references mscorlib or System.Runtime
+    assert any(n in {"mscorlib", "System.Runtime", "System.Private.CoreLib"} for n in names), \
+        f"expected a core BCL ref; got names={names}"
+    # Each row well-formed
+    for row in r["items"]:
+        assert row["name"]
+        # version may be null for some weird refs but usually present
+        assert "opened" in row
+
+
+def test_list_references_only_missing(mcp, asm):
+    """onlyMissing=True must filter out refs whose simple name matches an
+    opened asm. Default Workspace has only the test target opened, so all
+    refs should be missing."""
+    r = mcp.call_json("reverse_list_references", {"asmPath": asm, "onlyMissing": True})
+    assert all(not row["opened"] for row in r["items"])
+
+
 def test_cross_dll_find_string_and_xref(mcp, testtarget_asm: Path, tmp_path_factory):
     """When two copies of the assembly are open, find_string and
     xref_to_method with asmPath omitted must return hits from BOTH. This is

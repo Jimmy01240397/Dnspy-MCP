@@ -19,6 +19,31 @@
     <PackageReference Include="dnlib" Version="4.5.0" />
     <PackageReference Include="Microsoft.Diagnostics.Runtime" Version="4.0.722401" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="Krafs.Publicizer" Version="2.3.0">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <!-- dnSpy.Analyzer.x.dll: ships ScopedWhereUsedAnalyzer (cross-DLL "where
+       used" engine). Its classes are marked `internal` — Publicizer opens
+       them at build time so we can call them directly from our own code
+       with zero source duplication. Same pattern the agent uses for
+       dnSpy.Debugger.DotNet.CorDebug.x. The two `Contracts` refs supply
+       IDsDocumentService (the interface the analyzer takes) and SigComparer. -->
+  <ItemGroup>
+    <Publicize Include="dnSpy.Analyzer.x" />
+    <Reference Include="dnSpy.Analyzer.x">
+      <HintPath>..\lib\dnSpy.Analyzer.x.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="dnSpy.Contracts.DnSpy">
+      <HintPath>..\lib\dnSpy.Contracts.DnSpy.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="dnSpy.Contracts.Logic">
+      <HintPath>..\lib\dnSpy.Contracts.Logic.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>

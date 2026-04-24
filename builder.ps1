@@ -50,11 +50,17 @@ if (-not (Test-Path (Join-Path $dnspyDir 'dnSpy.sln'))) {
 }
 
 # ---------- 2. build dnspy subset into ./lib/ -------------------------------
-$corDebugProj = Join-Path $dnspyDir 'Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/dnSpy.Debugger.DotNet.CorDebug.csproj'
+$corDebugProj  = Join-Path $dnspyDir 'Extensions/dnSpy.Debugger/dnSpy.Debugger.DotNet.CorDebug/dnSpy.Debugger.DotNet.CorDebug.csproj'
+# dnSpy.Analyzer.x.dll carries the ScopedWhereUsedAnalyzer engine (cross-DLL
+# where-used xref) used by reverse_xref_to_method. It's a WPF-built DLL but
+# the analyzer classes themselves don't touch WPF types at runtime, so we
+# reference it via Krafs.Publicizer (matching the CorDebug.x.dll pattern).
+$analyzerProj  = Join-Path $dnspyDir 'Extensions/dnSpy.Analyzer/dnSpy.Analyzer.csproj'
 $corDebugOutDir = Join-Path $dnspyDir "dnSpy/dnSpy/bin/$Configuration"
 
 $needed = @(
     'dnSpy.Debugger.DotNet.CorDebug.x.dll',
+    'dnSpy.Analyzer.x.dll',
     'dnSpy.Contracts.Debugger.DotNet.CorDebug.dll',
     'dnSpy.Contracts.Debugger.DotNet.dll',
     'dnSpy.Contracts.Debugger.dll',
@@ -81,7 +87,11 @@ function Copy-Libs {
 if (-not $SkipDnSpy) {
     Write-Host "==> building dnspy CorDebug project ($Configuration)"
     & dotnet build $corDebugProj -c $Configuration -v minimal
-    if ($LASTEXITCODE -ne 0) { throw "dnspy build failed" }
+    if ($LASTEXITCODE -ne 0) { throw "dnspy CorDebug build failed" }
+
+    Write-Host "==> building dnspy Analyzer project ($Configuration)"
+    & dotnet build $analyzerProj -c $Configuration -v minimal
+    if ($LASTEXITCODE -ne 0) { throw "dnspy Analyzer build failed" }
 
     Write-Host "==> staging ./lib/"
     Copy-Libs -From $corDebugOutDir -To $libDir
