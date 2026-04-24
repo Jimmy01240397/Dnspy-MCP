@@ -11,7 +11,7 @@ public static class ModuleHandlers
     public static void Register(Dispatcher d)
     {
         d.Register("module.list_live",
-            "[LIVE] Enumerate managed modules loaded in the attached process (via dndbg, real CLR view). Params: {verbose?:bool=false}. Default rows: {shortName, name, address}. verbose=true also returns {appDomain, assembly, size, isDynamic, isInMemory}.",
+            "[DEBUG] Enumerate managed modules loaded in the attached process (via dndbg, real CLR view). Params: {verbose?:bool=false}. Default rows: {shortName, name, address}. verbose=true also returns {appDomain, assembly, size, isDynamic, isInMemory}.",
             p => Program.Session.OnDbg(() =>
             {
                 bool verbose = Dispatcher.Opt<bool>(p, "verbose", false);
@@ -50,7 +50,7 @@ public static class ModuleHandlers
             }));
 
         d.Register("module.find_type_live",
-            "[LIVE] Look up a type by full name across loaded modules. Returns module path + typeDef token(s). Params: {typeFullName:string}.",
+            "[DEBUG] Look up a type by full name across loaded modules. Returns module path + typeDef token(s). Params: {typeFullName:string}.",
             p => Program.Session.OnDbg(() =>
             {
                 var typeFullName = Dispatcher.Req<string>(p, "typeFullName");
@@ -71,7 +71,7 @@ public static class ModuleHandlers
             }));
 
         d.Register("module.list_type_methods",
-            "[LIVE] List all methods on a type. Params: {modulePath:string, typeFullName:string}. Returns [{token, name, attrs}].",
+            "[DEBUG] List all methods on a type. Params: {modulePath:string, typeFullName:string}. Returns [{token, name, attrs}].",
             p => Program.Session.OnDbg(() =>
             {
                 var modulePath = Dispatcher.Req<string>(p, "modulePath");

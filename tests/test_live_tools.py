@@ -165,6 +165,40 @@ def test_bp_set_by_name_and_list(live_agent):
     assert len(bps) >= 1
 
 
+def test_wait_paused_reports_bp_hit(live_agent):
+    """When a registered breakpoint triggers the pause, debug_wait_paused
+    must return bpHit carrying the matching registry id/description/token.
+    debug_session_info should mirror it while still paused.
+
+    Reuses the BP set by test_bp_set_by_name_and_list (Add). We don't clean
+    up afterwards so test_step_in_out below stays paused as it expects.
+    """
+    # Locate the Add breakpoint registered by an earlier test.
+    bps = _items(live_agent.call_json("debug_bp_list"))
+    add_bps = [b for b in bps if "Add" in (b.get("description") or "")]
+    assert add_bps, f"no Add breakpoint found in {bps}; test ordering changed?"
+    expected_ids = {b["id"] for b in add_bps}
+
+    # Add() runs every loop tick (every 500ms in dnspymcptest) — a generous
+    # 5s timeout absorbs the warmup if the target is between ticks.
+    r = live_agent.call_json("debug_wait_paused", {"timeoutMs": 5000})
+    assert r["state"] == "Paused"
+    hit = r.get("bpHit")
+    assert hit is not None, f"wait_paused returned no bpHit; full: {r}"
+    assert hit["count"] >= 1
+    first = hit["hits"][0]
+    assert first["id"] in expected_ids, f"expected one of {expected_ids}, got hit={first}"
+    assert "Add" in (first.get("description") or "")
+    assert first.get("ilOffset") == 0
+
+    # session.info should mirror the bpHit while still paused.
+    # debug_session_info nests the agent payload under `debugState`.
+    info = live_agent.call_json("debug_session_info")
+    ds = info.get("debugState") or {}
+    assert ds.get("bpHit") is not None, "session.info missed the BP hit"
+    assert ds["bpHit"]["hits"][0]["id"] in expected_ids
+
+
 def test_step_in_out(live_agent):
     live_agent.call_json("debug_pause")
     live_agent.call_json("debug_wait_paused", {"timeoutMs": 3000})
@@ -298,6 +332,50 @@ def test_attach_to_nonexistent_pid_errors(live_agent, testtarget_pid):
     r2 = live_agent.call_json("debug_pid_attach", {"pid": testtarget_pid})
     assert r2["attached"] is True
     assert r2["pid"] == testtarget_pid
+
+
+def test_attach_with_initial_breakpoints(live_agent, testtarget_pid):
+    """debug_pid_attach with initialBreakpointsJson sets breakpoints atomically
+    during the attach handshake, eliminating the race where the target runs
+    a method before the caller's first bp.set RPC arrives.
+
+    Each spec produces a row in initialBreakpoints[]; failures are reported
+    inline, not raised as the whole attach failing.
+    """
+    import json as _json
+    # Detach first to enter the attach path with a clean slate.
+    live_agent.call_json("debug_pid_detach")
+
+    specs = [
+        {"kind": "by_name", "modulePath": "dnspymcptest",
+         "typeFullName": "DnSpyMcp.TestTarget.Program", "methodName": "Multiply"},
+        {"kind": "by_name", "modulePath": "dnspymcptest",
+         "typeFullName": "DnSpyMcp.TestTarget.Program", "methodName": "DoesNotExist"},
+    ]
+    r = live_agent.call_json("debug_pid_attach", {
+        "pid": testtarget_pid,
+        "initialBreakpointsJson": _json.dumps(specs),
+    })
+    assert r["attached"] is True
+    assert r["pid"] == testtarget_pid
+    bps = r.get("initialBreakpoints")
+    assert bps is not None and len(bps) == 2, f"expected 2 BP results, got {bps}"
+    assert bps[0]["ok"] is True, f"first spec should have succeeded: {bps[0]}"
+    assert "Multiply" in (bps[0]["bp"]["description"] or "")
+    assert bps[1]["ok"] is False, f"DoesNotExist should fail: {bps[1]}"
+    assert "not found" in (bps[1]["error"] or "").lower()
+
+    # Sanity: BP shows up in debug_bp_list and Multiply gets hit promptly.
+    bp_list = _items(live_agent.call_json("debug_bp_list"))
+    assert any("Multiply" in (b.get("description") or "") for b in bp_list)
+    wait = live_agent.call_json("debug_wait_paused", {"timeoutMs": 5000})
+    assert wait["state"] == "Paused"
+    hit = wait.get("bpHit") or {}
+    descs = [h.get("description", "") for h in hit.get("hits", [])]
+    assert any("Multiply" in d or "Add" in d for d in descs), f"unexpected hit: {hit}"
+
+    # Clean up so subsequent attach tests start from a known state.
+    live_agent.call_json("debug_go")
 
 
 def test_attach_same_pid_is_idempotent(live_agent, testtarget_pid):

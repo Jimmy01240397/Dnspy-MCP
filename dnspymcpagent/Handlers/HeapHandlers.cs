@@ -11,7 +11,7 @@ public static class HeapHandlers
     public static void Register(Dispatcher d)
     {
         d.Register("heap.find_instances",
-            "[LIVE/DUMP] Walk the managed heap via ClrMD and return addresses of objects whose type name matches. Params: {typeName:string, max?:int=256}. typeName can be a substring or full name.",
+            "[DEBUG] Walk the managed heap via ClrMD and return addresses of objects whose type name matches. Params: {typeName:string, max?:int=256}. typeName can be a substring or full name.",
             p =>
             {
                 var typeName = Dispatcher.Req<string>(p, "typeName");
@@ -33,7 +33,7 @@ public static class HeapHandlers
             });
 
         d.Register("heap.read_object",
-            "[LIVE/DUMP] Read the fields of a managed object (address required). Returns per-field [{name, typeName, value}]. Primitives resolved; references returned as address. Params: {address:ulong, maxFields?:int=64}.",
+            "[DEBUG] Read the fields of a managed object (address required). Returns per-field [{name, typeName, value}]. Primitives resolved; references returned as address. Params: {address:ulong, maxFields?:int=64}.",
             p =>
             {
                 var address = Dispatcher.Req<ulong>(p, "address");
@@ -78,7 +78,7 @@ public static class HeapHandlers
             });
 
         d.Register("heap.read_string",
-            "[LIVE/DUMP] Read a System.String at the given managed address. Params: {address:ulong}.",
+            "[DEBUG] Read a System.String at the given managed address. Params: {address:ulong}.",
             p =>
             {
                 var address = Dispatcher.Req<ulong>(p, "address");
@@ -89,7 +89,7 @@ public static class HeapHandlers
             });
 
         d.Register("heap.stats",
-            "[LIVE/DUMP] Per-type aggregate stats (count + total size) over the managed heap. Params: {top?:int=25}.",
+            "[DEBUG] Per-type aggregate stats (count + total size) over the managed heap. Params: {top?:int=25}.",
             p =>
             {
                 var top = Dispatcher.Opt<int>(p, "top", 25);

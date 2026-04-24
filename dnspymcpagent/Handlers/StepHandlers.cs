@@ -10,19 +10,42 @@ public static class StepHandlers
     public static void Register(Dispatcher d)
     {
         d.Register("step.in",
-            "[LIVE] Step into the next IL instruction on the current thread. Waits until stepping completes or timeoutMs (default 5000).",
+            "[DEBUG] Step into the next IL instruction on the current thread. Waits until stepping completes or timeoutMs (default 5000).",
             p => DoStep(p, "in"));
 
         d.Register("step.over",
-            "[LIVE] Step over the next IL instruction on the current thread.",
+            "[DEBUG] Step over the next IL instruction on the current thread.",
             p => DoStep(p, "over"));
 
         d.Register("step.out",
-            "[LIVE] Step out of the current function.",
+            "[DEBUG] Step out of the current function.",
             p => DoStep(p, "out"));
 
+        // step.go / step.pause: were session.go / session.pause. Moved here
+        // because they are execution-flow primitives (continue / break) that
+        // belong with the rest of stepping, not with session lifecycle.
+        d.Register("step.go",
+            "[DEBUG] Continue a paused target (like WinDbg `g`).",
+            _ =>
+            {
+                Program.Session.OnDbg(() =>
+                {
+                    if (Program.Session.DnDebugger.ProcessState == DebuggerProcessState.Paused)
+                        Program.Session.DnDebugger.Continue();
+                });
+                return new { state = Program.Session.OnDbg(() => Program.Session.DnDebugger.ProcessState.ToString()) };
+            });
+
+        d.Register("step.pause",
+            "[DEBUG] Break (pause) the target.",
+            _ =>
+            {
+                Program.Session.OnDbg(() => Program.Session.DnDebugger.TryBreakProcesses());
+                return new { state = Program.Session.OnDbg(() => Program.Session.DnDebugger.ProcessState.ToString()) };
+            });
+
         d.Register("debug.wait_paused",
-            "[LIVE] Block until the target is Paused (breakpoint, step complete, or pause). Params: {timeoutMs?:int=5000}.",
+            "[DEBUG] Block until the target is Paused (breakpoint, step complete, or pause). Returns {state, bpHit?, timedOut?}. bpHit is populated when the pause was triggered by a registered breakpoint and carries the matching id/kind/description/methodToken/ilOffset/thread. Params: {timeoutMs?:int=5000}.",
             p =>
             {
                 var timeout = Dispatcher.Opt<int>(p, "timeoutMs", 5000);
@@ -31,7 +54,11 @@ public static class StepHandlers
                 {
                     var state = Program.Session.OnDbg(() => Program.Session.DnDebugger.ProcessState);
                     if (state == DebuggerProcessState.Paused || state == DebuggerProcessState.Terminated)
-                        return new { state = state.ToString() };
+                    {
+                        object? bpHit = null;
+                        try { bpHit = BreakpointHandlers.DescribeCurrentBpHit(); } catch { }
+                        return new { state = state.ToString(), bpHit };
+                    }
                     Thread.Sleep(50);
                 }
                 return new { state = Program.Session.OnDbg(() => Program.Session.DnDebugger.ProcessState.ToString()), timedOut = true };

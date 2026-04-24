@@ -12,7 +12,7 @@ public static class MemoryHandlers
     public static void Register(Dispatcher d)
     {
         d.Register("memory.read",
-            "[LIVE/DUMP] Read raw bytes at a virtual address. Returns hex string. Params: {address:ulong, size:int}.",
+            "[DEBUG] Read raw bytes at a virtual address. Returns hex string. Params: {address:ulong, size:int}.",
             p =>
             {
                 var address = Dispatcher.Req<ulong>(p, "address");
@@ -29,7 +29,7 @@ public static class MemoryHandlers
             });
 
         d.Register("memory.write",
-            "[LIVE] Write bytes at a virtual address (attached only). Params: {address:ulong, hex:string}.",
+            "[DEBUG] Write bytes at a virtual address (attached only). Params: {address:ulong, hex:string}.",
             p =>
             {
                 var address = Dispatcher.Req<ulong>(p, "address");
@@ -50,7 +50,7 @@ public static class MemoryHandlers
             });
 
         d.Register("memory.read_int",
-            "[LIVE/DUMP] Read a typed integer at address. Params: {address:ulong, kind?:string='i32' in {i8,u8,i16,u16,i32,u32,i64,u64}}.",
+            "[DEBUG] Read a typed integer at address. Params: {address:ulong, kind?:string='i32' in {i8,u8,i16,u16,i32,u32,i64,u64}}.",
             p =>
             {
                 var address = Dispatcher.Req<ulong>(p, "address");
@@ -80,7 +80,7 @@ public static class MemoryHandlers
             });
 
         d.Register("memory.disasm",
-            "[LIVE/DUMP] Disassemble x64 machine code at an address. Params: {address:ulong, size?:int=128}.",
+            "[DEBUG] Disassemble x64 machine code at an address. Params: {address:ulong, size?:int=128}.",
             p =>
             {
                 var address = Dispatcher.Req<ulong>(p, "address");

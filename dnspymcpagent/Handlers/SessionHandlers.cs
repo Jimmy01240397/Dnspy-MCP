@@ -17,23 +17,58 @@ public static class SessionHandlers
         // Load-dump stays startup-only (dumps are immutable by nature).
 
         d.Register("session.attach",
-            "[LIVE] Attach the debugger to a local .NET process by PID. If already attached elsewhere, detaches first. Params: pid:int.",
+            "[DEBUG] Attach the debugger to a local .NET process by PID. If already attached elsewhere, detaches first. Optionally registers a list of breakpoints atomically with the attach (eliminates the attach<->first-RPC race). Params: {pid:int, initialBreakpointsJson?:string=JSON-encoded array of breakpoint specs; supported kinds: \"by_name\" / \"il\" / \"native\"}. Returns {attached, pid, description, initialBreakpoints?:[{ok, bp?, error?, spec?}]}.",
             args =>
             {
                 if (args is not JObject obj || obj["pid"] == null)
                     throw new ArgumentException("pid (int) is required");
                 int pid = obj["pid"]!.Value<int>();
+
                 Program.Session.Attach(pid);
+
+                List<object>? bpResults = null;
+                var rawJson = obj["initialBreakpointsJson"]?.Value<string>();
+                if (!string.IsNullOrWhiteSpace(rawJson))
+                {
+                    JArray arr;
+                    try { arr = JArray.Parse(rawJson!); }
+                    catch (Newtonsoft.Json.JsonException ex)
+                    { throw new ArgumentException($"initialBreakpointsJson is not a valid JSON array: {ex.Message}"); }
+
+                    bpResults = new List<object>();
+                    Program.Session.OnDbg(() =>
+                    {
+                        foreach (var token in arr)
+                        {
+                            if (token is not JObject spec)
+                            {
+                                bpResults.Add(new { ok = false, error = "spec must be a JSON object" });
+                                continue;
+                            }
+                            try
+                            {
+                                var bp = BreakpointHandlers.SetBreakpointFromSpec(spec);
+                                bpResults.Add(new { ok = true, bp });
+                            }
+                            catch (Exception ex)
+                            {
+                                bpResults.Add(new { ok = false, spec, error = ex.Message });
+                            }
+                        }
+                    });
+                }
+
                 return new
                 {
                     attached = Program.Session.IsAttached,
                     pid = Program.Session.Pid,
                     description = Program.Session.Describe(),
+                    initialBreakpoints = bpResults,
                 };
             });
 
         d.Register("session.detach",
-            "[LIVE] Detach from the current target. Agent keeps listening. Idempotent — detach without attach is a no-op.",
+            "[DEBUG] Detach from the current target. Agent keeps listening. Idempotent — detach without attach is a no-op.",
             _ =>
             {
                 bool wasAttached = Program.Session.IsAttached || Program.Session.IsDump;
@@ -48,21 +83,31 @@ public static class SessionHandlers
             });
 
         d.Register("session.info",
-            "[LIVE] Describe the current debug session (attached pid / loaded dump / last exit info if any).",
-            _ => new
+            "[DEBUG] Describe the current debug session (attached pid / loaded dump / last exit info if any). When paused on a breakpoint, `bpHit` carries the matching registry id, kind, description, token, ilOffset and the thread that hit it.",
+            _ =>
             {
-                isAttached = Program.Session.IsAttached,
-                isDump = Program.Session.IsDump,
-                pid = Program.Session.Pid,
-                dumpPath = Program.Session.DumpPath,
-                description = Program.Session.Describe(),
-                lastExitedPid = Program.Session.LastExitedPid,
-                lastExitReason = Program.Session.LastExitReason,
-                lastExitUtc = Program.Session.LastExitUtc?.ToString("o"),
+                object? bpHit = null;
+                try { bpHit = BreakpointHandlers.DescribeCurrentBpHit(); } catch { /* not attached / state race */ }
+                return new
+                {
+                    isAttached = Program.Session.IsAttached,
+                    isDump = Program.Session.IsDump,
+                    pid = Program.Session.Pid,
+                    dumpPath = Program.Session.DumpPath,
+                    description = Program.Session.Describe(),
+                    lastExitedPid = Program.Session.LastExitedPid,
+                    lastExitReason = Program.Session.LastExitReason,
+                    lastExitUtc = Program.Session.LastExitUtc?.ToString("o"),
+                    bpHit,
+                };
             });
 
+        // session.dotnet_processes: stays here because it's part of the
+        // attach-side workflow (the agent helps the caller pick a PID before
+        // calling session.attach). Keeping it next to attach/detach makes
+        // the related operations group naturally on the agent surface.
         d.Register("session.dotnet_processes",
-            "List .NET processes on this machine (has CLR loaded). Use to pick a PID for `dnspymcpagent --attach`.",
+            "[DEBUG] List .NET processes on this machine (has CLR loaded). Use to pick a PID for debug_pid_attach.",
             _ =>
             {
                 var rows = new List<object>();
@@ -81,32 +126,12 @@ public static class SessionHandlers
                 return rows;
             });
 
-        d.Register("session.go",
-            "[LIVE] Continue a paused target (like WinDbg `g`).",
-            _ =>
-            {
-                Program.Session.OnDbg(() =>
-                {
-                    if (Program.Session.DnDebugger.ProcessState == dndbg.Engine.DebuggerProcessState.Paused)
-                        Program.Session.DnDebugger.Continue();
-                });
-                return new { state = Program.Session.OnDbg(() => Program.Session.DnDebugger.ProcessState.ToString()) };
-            });
-
-        d.Register("session.pause",
-            "[LIVE] Break (pause) the target.",
-            _ =>
-            {
-                Program.Session.OnDbg(() => Program.Session.DnDebugger.TryBreakProcesses());
-                return new { state = Program.Session.OnDbg(() => Program.Session.DnDebugger.ProcessState.ToString()) };
-            });
-
-        d.Register("session.terminate",
-            "[LIVE] Terminate the target process (destructive).",
-            _ =>
-            {
-                Program.Session.OnDbg(() => Program.Session.DnDebugger.TerminateProcesses());
-                return new { terminated = true };
-            });
+        // Process-control operations (go / pause) used to live here under
+        // session.* but they are stepping/execution-flow primitives, not
+        // session-lifecycle. Moved to StepHandlers as step.go / step.pause.
+        // session.terminate (destructive) was removed entirely — no MCP tool
+        // ever exposed it, the death-watcher already handles target exits,
+        // and "kill the debuggee" is an OS responsibility, not a debugger
+        // RPC we want to invite from a remote caller.
     }
 }

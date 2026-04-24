@@ -30,11 +30,11 @@ modern-.NET tooling.
 
 ## Tool naming convention
 
-Every MCP tool is tagged either `[FILE]` or `[LIVE]`:
+Every MCP tool is tagged either `[REVERSE]` or `[DEBUG]`:
 
-* **`[FILE]`** — operates on a .dll/.exe on disk. Doesn't need the agent.
+* **`[REVERSE]`** — operates on a .dll/.exe on disk. Doesn't need the agent.
   Prefixed with `asm_file_*`, `decompile_*`, `il_*`, `file_patch_*`.
-* **`[LIVE]`** — operates on a running / dumped process through the agent.
+* **`[DEBUG]`** — operates on a running / dumped process through the agent.
   Prefixed with `live_*`.
 
 The first line of every tool description states the target context so the

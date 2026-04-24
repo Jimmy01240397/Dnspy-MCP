@@ -103,9 +103,20 @@ public static class LiveDebugTools
     // the target dies. Load-dump stays startup-only (dumps are immutable).
 
     [McpServerTool(Name = "debug_pid_attach")]
-    [Description("[DEBUG] Ask the agent to attach its debugger to a local PID. If already attached, detaches first. Idempotent on the same pid. Params: pid:int, agent (optional).")]
-    public static object Attach(AgentRegistry reg, int pid, string? agent = null)
-        => reg.Get(agent).Result("session.attach", new { pid })!;
+    [Description("[DEBUG] Ask the agent to attach its debugger to a local PID. If already attached, detaches first. Idempotent on the same pid. Optionally registers breakpoints atomically with the attach via initialBreakpointsJson — a JSON array of `{kind:\"by_name\"|\"il\"|\"native\", ...}` specs (matching debug_bp_set_by_name / debug_bp_set_il / debug_bp_set_native params). Closes the attach<->first-RPC race so very-early code paths get caught. Response carries `initialBreakpoints[]` per-spec results. Params: pid:int, initialBreakpointsJson (optional), agent (optional).")]
+    public static object Attach(AgentRegistry reg, int pid, string? initialBreakpointsJson = null, string? agent = null)
+    {
+        if (!string.IsNullOrWhiteSpace(initialBreakpointsJson))
+        {
+            // Validate parse client-side so the caller gets a clear MCP-level
+            // error rather than a generic agent failure message.
+            try { _ = System.Text.Json.JsonDocument.Parse(initialBreakpointsJson); }
+            catch (System.Text.Json.JsonException ex)
+            { throw new McpException($"initialBreakpointsJson is not valid JSON: {ex.Message}"); }
+            return reg.Get(agent).Result("session.attach", new { pid, initialBreakpointsJson })!;
+        }
+        return reg.Get(agent).Result("session.attach", new { pid })!;
+    }
 
     [McpServerTool(Name = "debug_pid_detach")]
     [Description("[DEBUG] Ask the agent to detach from its current target. Agent keeps listening. No-op if not attached. Params: agent (optional).")]
@@ -119,12 +130,12 @@ public static class LiveDebugTools
     [McpServerTool(Name = "debug_go")]
     [Description("[DEBUG] Continue the target (like WinDbg `g`).")]
     public static object Go(AgentRegistry reg, string? agent = null)
-        => reg.Get(agent).Result("session.go")!;
+        => reg.Get(agent).Result("step.go")!;
 
     [McpServerTool(Name = "debug_pause")]
     [Description("[DEBUG] Break (pause) the target.")]
     public static object Pause(AgentRegistry reg, string? agent = null)
-        => reg.Get(agent).Result("session.pause")!;
+        => reg.Get(agent).Result("step.pause")!;
 
     [McpServerTool(Name = "debug_wait_paused")]
     [Description("[DEBUG] Wait until the target enters Paused (breakpoint / step). Params: timeoutMs=5000.")]
@@ -234,7 +245,7 @@ public static class LiveDebugTools
     // ---- heap / memory --------------------------------------------------
 
     [McpServerTool(Name = "debug_heap_find_instances")]
-    [Description("[LIVE/DUMP] Find managed object addresses by type name (substring ok, paginated). Params: typeName, offset=0, max=200. Agent walks heap up to (offset+max); MCP slices to envelope. Bump offset to continue past truncation.")]
+    [Description("[DEBUG] Find managed object addresses by type name (substring ok, paginated). Params: typeName, offset=0, max=200. Agent walks heap up to (offset+max); MCP slices to envelope. Bump offset to continue past truncation.")]
     public static object HeapFind(AgentRegistry reg, string typeName, int offset = 0, int max = 200, string? agent = null)
     {
         var fetch = System.Math.Max(1, offset + System.Math.Min(max, Paging.HardMaxRows));
@@ -242,22 +253,22 @@ public static class LiveDebugTools
     }
 
     [McpServerTool(Name = "debug_heap_read_object")]
-    [Description("[LIVE/DUMP] Dump fields of a managed object. Params: address:ulong, maxFields=64.")]
+    [Description("[DEBUG] Dump fields of a managed object. Params: address:ulong, maxFields=64.")]
     public static object HeapReadObject(AgentRegistry reg, ulong address, int maxFields = 64, string? agent = null)
         => reg.Get(agent).Result("heap.read_object", new { address, maxFields })!;
 
     [McpServerTool(Name = "debug_heap_read_string")]
-    [Description("[LIVE/DUMP] Read a System.String at a managed address.")]
+    [Description("[DEBUG] Read a System.String at a managed address.")]
     public static object HeapReadString(AgentRegistry reg, ulong address, string? agent = null)
         => reg.Get(agent).Result("heap.read_string", new { address })!;
 
     [McpServerTool(Name = "debug_heap_stats")]
-    [Description("[LIVE/DUMP] Top-N types on the managed heap by total size (paginated). Params: top=25 (agent-side), offset=0, max=200 (MCP envelope cap).")]
+    [Description("[DEBUG] Top-N types on the managed heap by total size (paginated). Params: top=25 (agent-side), offset=0, max=200 (MCP envelope cap).")]
     public static object HeapStats(AgentRegistry reg, int top = 25, int offset = 0, int max = 200, string? agent = null)
         => Paging.PageJsonArray(reg.Get(agent).Result("heap.stats", new { top }), offset, max);
 
     [McpServerTool(Name = "debug_memory_read")]
-    [Description("[LIVE/DUMP] Read raw bytes (returned as hex) at a virtual address. Params: address:ulong, size:int (1..1MB).")]
+    [Description("[DEBUG] Read raw bytes (returned as hex) at a virtual address. Params: address:ulong, size:int (1..1MB).")]
     public static object MemoryRead(AgentRegistry reg, ulong address, int size, string? agent = null)
         => reg.Get(agent).Result("memory.read", new { address, size })!;
 
@@ -267,12 +278,12 @@ public static class LiveDebugTools
         => reg.Get(agent).Result("memory.write", new { address, hex })!;
 
     [McpServerTool(Name = "debug_memory_read_int")]
-    [Description("[LIVE/DUMP] Read a typed integer from memory. kind in {i8,u8,i16,u16,i32,u32,i64,u64}, default 'i32'.")]
+    [Description("[DEBUG] Read a typed integer from memory. kind in {i8,u8,i16,u16,i32,u32,i64,u64}, default 'i32'.")]
     public static object MemoryReadInt(AgentRegistry reg, ulong address, string kind = "i32", string? agent = null)
         => reg.Get(agent).Result("memory.read_int", new { address, kind })!;
 
     [McpServerTool(Name = "debug_disasm")]
-    [Description("[LIVE/DUMP] Disassemble x64 bytes at a virtual address via Iced. Params: address:ulong, size=128.")]
+    [Description("[DEBUG] Disassemble x64 bytes at a virtual address via Iced. Params: address:ulong, size=128.")]
     public static object Disasm(AgentRegistry reg, ulong address, int size = 128, string? agent = null)
         => reg.Get(agent).Result("memory.disasm", new { address, size })!;
 }

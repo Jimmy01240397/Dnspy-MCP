@@ -11,7 +11,7 @@ public static class ThreadStackHandlers
     public static void Register(Dispatcher d)
     {
         d.Register("thread.list",
-            "[LIVE] List all managed threads in the attached process. Includes uniqueId, osThreadId, volatileThreadId, frameCount.",
+            "[DEBUG] List all managed threads in the attached process. Includes uniqueId, osThreadId, volatileThreadId, frameCount.",
             _ => Program.Session.OnDbg(() =>
             {
                 var dbg = Program.Session.DnDebugger;
@@ -35,7 +35,7 @@ public static class ThreadStackHandlers
             }));
 
         d.Register("thread.stack",
-            "[LIVE] Return the managed call stack for a thread. Identify the thread with EITHER uniqueId (debugger-assigned) OR osThreadId. Legacy alias: threadId == uniqueId. Params: {uniqueId?:int, osThreadId?:int, threadId?:int, max?:int=32}.",
+            "[DEBUG] Return the managed call stack for a thread. Identify the thread with EITHER uniqueId (debugger-assigned) OR osThreadId. Legacy alias: threadId == uniqueId. Params: {uniqueId?:int, osThreadId?:int, threadId?:int, max?:int=32}.",
             p => Program.Session.OnDbg(() =>
             {
                 int? uniqueId = p != null && p.TryGetValue("uniqueId", System.StringComparison.OrdinalIgnoreCase, out var uTok) && uTok.Type != JTokenType.Null
@@ -111,7 +111,7 @@ public static class ThreadStackHandlers
             }));
 
         d.Register("thread.current",
-            "[LIVE] Return the thread that triggered the last pause (breakpoint / exception / step).",
+            "[DEBUG] Return the thread that triggered the last pause (breakpoint / exception / step).",
             _ => Program.Session.OnDbg<object>(() =>
             {
                 var cur = Program.Session.DnDebugger.Current.Thread;
