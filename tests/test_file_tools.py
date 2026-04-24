@@ -498,6 +498,59 @@ def test_reverse_xref_to_type_unknown_errors(mcp, asm):
     assert "type not found" in r["text"].lower()
 
 
+def test_reverse_annotations_roundtrip(mcp, asm, tmp_path_factory):
+    # Run on a copy of the test asm so the sidecar sticks around for
+    # cross-tool inspection without leaking into other tests.
+    import shutil, json as _json, os
+    tmp = tmp_path_factory.mktemp("annot") / "dnspymcptest.exe"
+    shutil.copy2(asm, tmp)
+    asm_str = str(tmp)
+
+    # Open the copy fresh (the conftest fixture only opens `asm`, not `tmp`).
+    mcp.call_json("reverse_open", {"asmPath": asm_str})
+    try:
+        # Pick a known method token via reverse_list_methods.
+        methods = mcp.call_json("reverse_list_methods",
+                                {"asmPath": asm_str, "typeFullName": "DnSpyMcp.TestTarget.Program"})["items"]
+        add = next(m for m in methods if m["name"] == "Add")
+        token = add["token"]
+
+        # Rename + comment.
+        r1 = mcp.call_json("reverse_rename_member",
+                           {"asmPath": asm_str, "token": token, "newName": "AddTwoInts"})
+        assert r1["ok"] is True
+        assert r1["newName"] == "AddTwoInts"
+        sidecar = r1["sidecarPath"]
+        assert os.path.exists(sidecar), f"sidecar not written: {sidecar}"
+
+        r2 = mcp.call_json("reverse_set_comment",
+                           {"asmPath": asm_str, "token": token, "text": "trivial integer add — used by Compute"})
+        assert r2["ok"] is True
+
+        # List should show both rows.
+        listing = mcp.call_json("reverse_list_annotations", {"asmPath": asm_str})
+        kinds = {row["kind"] for row in listing["items"]}
+        assert "rename" in kinds and "comment" in kinds
+
+        # Sidecar JSON contains both entries under string-token keys.
+        with open(sidecar, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        assert str(token) in data["renames"]
+        assert data["renames"][str(token)] == "AddTwoInts"
+        assert str(token) in data["comments"]
+
+        # Clear rename only — comment should survive.
+        clr = mcp.call_json("reverse_clear_annotation",
+                            {"asmPath": asm_str, "token": token, "kind": "rename"})
+        assert clr["removedRename"] is True
+        assert clr["removedComment"] is False
+        listing2 = mcp.call_json("reverse_list_annotations", {"asmPath": asm_str})
+        kinds2 = {row["kind"] for row in listing2["items"]}
+        assert "rename" not in kinds2 and "comment" in kinds2
+    finally:
+        mcp.call_json("reverse_close", {"asmPath": asm_str})
+
+
 def test_reverse_patch_il_nop(mcp, asm, tmp_path_factory):
     out = tmp_path_factory.mktemp("patch") / "dnspymcptest.patched.exe"
     r = mcp.call_json("reverse_patch_il_nop", {

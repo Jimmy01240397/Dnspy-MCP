@@ -23,6 +23,10 @@ public sealed class Workspace : IDisposable
         public ModuleDefMD Module { get; } = module;
         public CSharpDecompiler Decompiler { get; } = decompiler;
         public PEFile PEFile { get; } = peFile;
+        // Per-asm sidecar JSON of user annotations (renames + comments).
+        // Loaded on first access; persisted on every mutation. Lives next
+        // to the file so it survives MCP-server restarts.
+        public AnnotationStore Annotations { get; } = new(path);
     }
 
     private readonly ConcurrentDictionary<string, OpenedAsm> _open = new(System.StringComparer.OrdinalIgnoreCase);
