@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using dndbg.Engine;
@@ -20,11 +21,20 @@ public sealed class DebuggerSession : IDisposable
     private DnDebugger? _dnDebugger;
     private DataTarget? _clrMdTarget;
     private ClrRuntime? _clrRuntime;
+    private System.Threading.Thread? _deathWatcher;
+    private System.Threading.CancellationTokenSource? _deathWatcherCts;
+    private Process? _watchedProcess;
 
     public int? Pid { get; private set; }
     public string? DumpPath { get; private set; }
     public bool IsAttached => _dnDebugger != null;
     public bool IsDump => _clrMdTarget != null && _dnDebugger == null;
+
+    // Last exit info retained across detach so callers can see WHY the session
+    // ended (user-initiated detach, target process exit, etc.).
+    public int? LastExitedPid { get; private set; }
+    public string? LastExitReason { get; private set; }
+    public DateTime? LastExitUtc { get; private set; }
 
     public readonly BreakpointRegistry Breakpoints = new();
 
@@ -45,6 +55,10 @@ public sealed class DebuggerSession : IDisposable
         lock (_lock)
         {
             Detach();
+            // Clear stale exit info — a fresh attach starts a clean history.
+            LastExitedPid = null;
+            LastExitReason = null;
+            LastExitUtc = null;
 
             _dbgThread = new DebuggerThread("dnspymcp-dbg");
             _dbgThread.CallDispatcherRun();
@@ -56,42 +70,66 @@ public sealed class DebuggerSession : IDisposable
             var attachComplete = new ManualResetEventSlim(false);
             Exception? attachError = null;
 
+            // Wrap the STA Invoke body in try/catch: any unhandled exception
+            // from DnDebugger.Attach (e.g. bad PID, access denied) would
+            // otherwise kill the STA thread and take the whole agent down —
+            // precisely what A5 (auto-detach on target death, agent survives)
+            // was designed to prevent, applied here symmetrically for the
+            // attach failure path. Capture and rethrow on the caller thread.
             _dnDebugger = _dbgThread.Invoke(() =>
             {
-                var attachInfo = new DesktopCLRTypeAttachInfo(string.Empty);
-                // DebugOptions.DebugOptionsProvider is non-nullable — if left null, the
-                // CreateProcess callback handler inside dndbg dereferences it and throws
-                // NRE. The exception is swallowed by OnManagedCallbackFromAnyThread2 and
-                // Continue() is never called, which stalls the entire callback burst.
-                var options = new AttachProcessOptions(attachInfo)
+                try
                 {
-                    ProcessId = pid,
-                    DebugMessageDispatcher = _dbgThread.GetDebugMessageDispatcher(),
-                    DebugOptions = new DebugOptions { DebugOptionsProvider = new DefaultDebugOptionsProvider() },
-                };
-                var dbg = DnDebugger.Attach(options);
+                    var attachInfo = new DesktopCLRTypeAttachInfo(string.Empty);
+                    // DebugOptions.DebugOptionsProvider is non-nullable — if left null, the
+                    // CreateProcess callback handler inside dndbg dereferences it and throws
+                    // NRE. The exception is swallowed by OnManagedCallbackFromAnyThread2 and
+                    // Continue() is never called, which stalls the entire callback burst.
+                    var options = new AttachProcessOptions(attachInfo)
+                    {
+                        ProcessId = pid,
+                        DebugMessageDispatcher = _dbgThread.GetDebugMessageDispatcher(),
+                        DebugOptions = new DebugOptions { DebugOptionsProvider = new DefaultDebugOptionsProvider() },
+                    };
+                    var dbg = DnDebugger.Attach(options);
 
-                // If DebugActiveProcess HRESULT'd we'd have no processes — fail loud, don't
-                // return a half-dead DnDebugger to the caller.
-                if (dbg.Processes.Length == 0)
-                {
-                    attachError = new InvalidOperationException(
-                        $"ICorDebug attach returned no processes for pid={pid} (DebugActiveProcess failed — process gone, wrong CLR version, already being debugged, or access denied)");
+                    // If DebugActiveProcess HRESULT'd we'd have no processes — fail loud, don't
+                    // return a half-dead DnDebugger to the caller.
+                    if (dbg.Processes.Length == 0)
+                    {
+                        attachError = new InvalidOperationException(
+                            $"ICorDebug attach returned no processes for pid={pid} (DebugActiveProcess failed — process gone, wrong CLR version, already being debugged, or access denied)");
+                        return dbg;
+                    }
+
+                    // Krafs.Publicizer republishes the internal backing field alongside the public
+                    // event, so direct `dbg.OnAttachComplete += ...` fails to compile with CS0229.
+                    // Subscribe via reflection — reflection sees the event, not the field.
+                    var evt = typeof(DnDebugger).GetEvent("OnAttachComplete")
+                        ?? throw new InvalidOperationException("DnDebugger.OnAttachComplete event missing");
+                    EventHandler handler = (_, _) => attachComplete.Set();
+                    evt.AddEventHandler(dbg, handler);
                     return dbg;
                 }
-
-                // Krafs.Publicizer republishes the internal backing field alongside the public
-                // event, so direct `dbg.OnAttachComplete += ...` fails to compile with CS0229.
-                // Subscribe via reflection — reflection sees the event, not the field.
-                var evt = typeof(DnDebugger).GetEvent("OnAttachComplete")
-                    ?? throw new InvalidOperationException("DnDebugger.OnAttachComplete event missing");
-                EventHandler handler = (_, _) => attachComplete.Set();
-                evt.AddEventHandler(dbg, handler);
-                return dbg;
+                catch (Exception ex)
+                {
+                    attachError = ex;
+                    return null!;
+                }
             });
 
             if (attachError != null)
+            {
+                // Tear down the half-initialized STA thread before throwing
+                // so the next attach starts from a clean state.
+                if (_dbgThread != null)
+                {
+                    try { _dbgThread.Terminate(); } catch { /* ignore */ }
+                    _dbgThread = null;
+                }
+                _dnDebugger = null;
                 throw attachError;
+            }
 
             Pid = pid;
             DumpPath = null;
@@ -122,7 +160,72 @@ public sealed class DebuggerSession : IDisposable
             // Done AFTER ICorDebug bootstrap so the process is in a stable state.
             _clrMdTarget = DataTarget.AttachToProcess(pid, false);
             _clrRuntime = _clrMdTarget.ClrVersions.FirstOrDefault()?.CreateRuntime();
+
+            // Start a watchdog that polls the target PID. If the target goes
+            // away (process crash, user kills it, IIS recycles the app pool),
+            // we auto-detach so the agent itself survives and a new `attach`
+            // is possible without bouncing the whole agent.
+            StartDeathWatcher(pid);
         }
+    }
+
+    // ---- target process death watcher -----------------------------------
+    // ICorDebug's managed callback model is STA-bound and fragile in remote-
+    // attach scenarios; rather than rely on ExitProcess callbacks we poll the
+    // OS Process object. Cheap, reliable, and works for both local and
+    // remote targets (ICorDebug can only attach to local processes anyway).
+    private void StartDeathWatcher(int pid)
+    {
+        StopDeathWatcher();
+        try { _watchedProcess = Process.GetProcessById(pid); }
+        catch (ArgumentException) { /* already gone; Attach() will throw separately */ return; }
+
+        _deathWatcherCts = new CancellationTokenSource();
+        var cts = _deathWatcherCts;
+        var watched = _watchedProcess;
+        _deathWatcher = new Thread(() =>
+        {
+            try
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    // WaitForExit with a short poll window so we cooperate
+                    // with cancellation on user-initiated detach / Dispose.
+                    if (watched.WaitForExit(500))
+                    {
+                        OnTargetProcessDied(pid, $"target process {pid} exited (code {TryGetExitCode(watched)})");
+                        return;
+                    }
+                }
+            }
+            catch (Exception ex) { OnTargetProcessDied(pid, $"death watcher error: {ex.Message}"); }
+        }) { IsBackground = true, Name = "dnspymcp-death-watcher" };
+        _deathWatcher.Start();
+    }
+
+    private static string TryGetExitCode(Process p)
+    {
+        try { return p.ExitCode.ToString(); } catch { return "?"; }
+    }
+
+    private void StopDeathWatcher()
+    {
+        try { _deathWatcherCts?.Cancel(); } catch { }
+        _deathWatcherCts = null;
+        _watchedProcess = null;
+        // Don't Join the thread — it owns an STA-bound callback into the
+        // debug session and we're already inside `_lock`. It exits on its
+        // next poll tick (<500ms).
+        _deathWatcher = null;
+    }
+
+    private void OnTargetProcessDied(int pid, string reason)
+    {
+        // Record exit info BEFORE detach clears Pid.
+        LastExitedPid = pid;
+        LastExitReason = reason;
+        LastExitUtc = DateTime.UtcNow;
+        try { Detach(); } catch { /* best-effort — agent must keep listening */ }
     }
 
     private (int processes, int appDomains, int modules, int threads) ReadBootstrapState()
@@ -171,6 +274,18 @@ public sealed class DebuggerSession : IDisposable
     {
         lock (_lock)
         {
+            // If the caller invoked Detach directly (not via death watcher),
+            // attribute the exit reason. Death-watcher path sets its own
+            // LastExitReason before calling Detach, so we don't clobber it.
+            if (Pid != null && LastExitReason == null)
+            {
+                LastExitedPid = Pid;
+                LastExitReason = "user detach";
+                LastExitUtc = DateTime.UtcNow;
+            }
+
+            StopDeathWatcher();
+
             if (_dnDebugger != null)
             {
                 try

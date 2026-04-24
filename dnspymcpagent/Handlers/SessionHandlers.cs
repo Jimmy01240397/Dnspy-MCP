@@ -11,14 +11,44 @@ public static class SessionHandlers
 {
     public static void Register(Dispatcher d)
     {
-        // Attach / detach / load-dump are NOT exposed as runtime methods on purpose.
-        // The design is "one agent process == one target": boot the agent with
-        // `--attach <pid>` or `--dump <path>` and it stays pinned to that target
-        // until it exits. To talk to a different target, start another agent on a
-        // different port and let the MCP server connect to it via live_agent_connect.
+        // Attach / detach are runtime-controllable — one agent process can be
+        // repointed at any local PID across its lifetime, no restart required.
+        // Target process death auto-detaches; the agent itself keeps listening.
+        // Load-dump stays startup-only (dumps are immutable by nature).
+
+        d.Register("session.attach",
+            "[LIVE] Attach the debugger to a local .NET process by PID. If already attached elsewhere, detaches first. Params: pid:int.",
+            args =>
+            {
+                if (args is not JObject obj || obj["pid"] == null)
+                    throw new ArgumentException("pid (int) is required");
+                int pid = obj["pid"]!.Value<int>();
+                Program.Session.Attach(pid);
+                return new
+                {
+                    attached = Program.Session.IsAttached,
+                    pid = Program.Session.Pid,
+                    description = Program.Session.Describe(),
+                };
+            });
+
+        d.Register("session.detach",
+            "[LIVE] Detach from the current target. Agent keeps listening. Idempotent — detach without attach is a no-op.",
+            _ =>
+            {
+                bool wasAttached = Program.Session.IsAttached || Program.Session.IsDump;
+                Program.Session.Detach();
+                return new
+                {
+                    detached = wasAttached,
+                    lastExitedPid = Program.Session.LastExitedPid,
+                    lastExitReason = Program.Session.LastExitReason,
+                    lastExitUtc = Program.Session.LastExitUtc?.ToString("o"),
+                };
+            });
 
         d.Register("session.info",
-            "[LIVE] Describe the current debug session (attached pid / loaded dump).",
+            "[LIVE] Describe the current debug session (attached pid / loaded dump / last exit info if any).",
             _ => new
             {
                 isAttached = Program.Session.IsAttached,
@@ -26,6 +56,9 @@ public static class SessionHandlers
                 pid = Program.Session.Pid,
                 dumpPath = Program.Session.DumpPath,
                 description = Program.Session.Describe(),
+                lastExitedPid = Program.Session.LastExitedPid,
+                lastExitReason = Program.Session.LastExitReason,
+                lastExitUtc = Program.Session.LastExitUtc?.ToString("o"),
             });
 
         d.Register("session.dotnet_processes",

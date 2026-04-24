@@ -21,24 +21,24 @@ public static class LiveDebugTools
     // and auto-reconnects if the underlying agent restarts. You never need
     // to disconnect+reconnect between tool calls; just `switch`.
 
-    [McpServerTool(Name = "live_agent_open")]
-    [Description("[LIVE] Open (or re-open) a named session to a dnspymcpagent at host:port and make it active. Idempotent — calling with an existing name reconfigures and reconnects that slot. Params: host (required), port (required), token=null, name='default'.")]
-    public static object AgentOpen(AgentRegistry reg, string host, int port, string? token = null, string name = "default")
+    [McpServerTool(Name = "debug_session_connect")]
+    [Description("[LIVE] Connect (or re-connect) a named TCP session to a dnspymcpagent at host:port and make it active. Idempotent — calling with an existing name reconfigures and reconnects that slot. Does NOT attach the debugger to any target; call `debug_pid_attach` for that. Params: host (required), port (required), token=null, name='default'.")]
+    public static object AgentConnect(AgentRegistry reg, string host, int port, string? token = null, string name = "default")
     {
         var agent = reg.GetOrCreate(name);
         agent.Configure(host, port, token);
         agent.Connect();
         reg.SetActive(name);
-        return new { opened = true, name, host, port, active = name };
+        return new { connected = true, name, host, port, active = name };
     }
 
-    [McpServerTool(Name = "live_agent_close")]
-    [Description("[LIVE] Close a session: disconnects TCP and unregisters the slot. Params: name (required).")]
-    public static object AgentClose(AgentRegistry reg, string name)
-        => new { closed = reg.Remove(name), current = reg.ActiveName };
+    [McpServerTool(Name = "debug_session_disconnect")]
+    [Description("[LIVE] Disconnect a session: closes TCP link and unregisters the slot. Does NOT detach the remote agent from its target (use `debug_pid_detach` first if needed). Params: name (required).")]
+    public static object AgentDisconnect(AgentRegistry reg, string name)
+        => new { disconnected = reg.Remove(name), current = reg.ActiveName };
 
-    [McpServerTool(Name = "live_agent_list")]
-    [Description("[LIVE] List every open session (name, host:port, connected?, active?).")]
+    [McpServerTool(Name = "debug_session_list")]
+    [Description("[LIVE] List every open session (name, host:port, TCP connected?, active?).")]
     public static object AgentList(AgentRegistry reg)
     {
         var active = reg.ActiveName;
@@ -51,11 +51,34 @@ public static class LiveDebugTools
         }).ToArray();
     }
 
-    [McpServerTool(Name = "live_agent_current")]
-    [Description("[LIVE] Return the currently-active session name (used by other LIVE tools when 'agent' is omitted).")]
-    public static object AgentCurrent(AgentRegistry reg) => new { current = reg.ActiveName };
+    [McpServerTool(Name = "debug_session_info")]
+    [Description("[LIVE] Describe the currently-active session: which named slot is active, TCP host/port, and the full debug state of its agent (attached pid / dump path / last-exit pid+reason+UTC retained across detach). One-stop status — no separate session_info needed.")]
+    public static object AgentCurrent(AgentRegistry reg)
+    {
+        var name = reg.ActiveName;
+        if (string.IsNullOrEmpty(name))
+            return new { current = (string?)null, connected = false, debugState = (object?)null };
 
-    [McpServerTool(Name = "live_agent_switch")]
+        var agent = reg.Get(null);
+        // Fetch the agent's debug state; if the agent TCP session is down we
+        // still want to surface SOMETHING useful rather than throwing.
+        object? debugState = null;
+        string? error = null;
+        try { debugState = agent.Result("session.info"); }
+        catch (Exception ex) { error = ex.Message; }
+
+        return new
+        {
+            current = name,
+            host = agent.Host,
+            port = agent.Port,
+            connected = agent.IsConnected,
+            debugState,
+            debugStateError = error,
+        };
+    }
+
+    [McpServerTool(Name = "debug_session_switch")]
     [Description("[LIVE] Switch the active session. Subsequent LIVE tools target this one when 'agent' is omitted — no reconnect needed.")]
     public static object AgentSwitch(AgentRegistry reg, string name)
     {
@@ -63,57 +86,59 @@ public static class LiveDebugTools
         return new { current = name };
     }
 
-    [McpServerTool(Name = "live_agent_list_methods")]
+    [McpServerTool(Name = "debug_list_methods")]
     [Description("[LIVE] Ask an agent to list every registered debug method (paginated). Params: offset=0, max=200, agent (optional — uses active). Response: {total, offset, returned, truncated, items}.")]
     public static object AgentListMethods(AgentRegistry reg, int offset = 0, int max = 200, string? agent = null)
         => Paging.PageJsonArray(reg.Get(agent).Result("__list__"), offset, max);
 
     // ---- session ---------------------------------------------------------
 
-    [McpServerTool(Name = "live_list_dotnet_processes")]
+    [McpServerTool(Name = "debug_list_dotnet_processes")]
     [Description("[LIVE] List running .NET processes on the agent's host (paginated). Params: offset=0, max=200.")]
     public static object ListProcesses(AgentRegistry reg, int offset = 0, int max = 200, string? agent = null)
         => Paging.PageJsonArray(reg.Get(agent).Result("session.dotnet_processes"), offset, max);
 
-    // session.attach / session.detach / session.load_dump are intentionally NOT
-    // exposed as MCP tools. An agent process is pinned to one target for its
-    // lifetime — boot it with `dnspymcpagent.exe --attach <pid>` or `--dump <path>`.
-    // To debug a different target, start a second agent on a different port and
-    // call live_agent_open with that host:port.
+    // Agent lifecycle is runtime-controllable: one agent process can be
+    // attached to any local PID over its lifetime, and auto-detaches when
+    // the target dies. Load-dump stays startup-only (dumps are immutable).
 
-    [McpServerTool(Name = "live_session_info")]
-    [Description("[LIVE] Describe the agent's current debug session (pid / dump / state).")]
-    public static object SessionInfo(AgentRegistry reg, string? agent = null)
-        => reg.Get(agent).Result("session.info")!;
+    [McpServerTool(Name = "debug_pid_attach")]
+    [Description("[LIVE] Ask the agent to attach its debugger to a local PID. If already attached, detaches first. Idempotent on the same pid. Params: pid:int, agent (optional).")]
+    public static object Attach(AgentRegistry reg, int pid, string? agent = null)
+        => reg.Get(agent).Result("session.attach", new { pid })!;
 
-    [McpServerTool(Name = "live_session_go")]
+    [McpServerTool(Name = "debug_pid_detach")]
+    [Description("[LIVE] Ask the agent to detach from its current target. Agent keeps listening. No-op if not attached. Params: agent (optional).")]
+    public static object Detach(AgentRegistry reg, string? agent = null)
+        => reg.Get(agent).Result("session.detach")!;
+
+    // session state is surfaced through debug_session_info — no separate
+    // tool. To kill the target process use the OS (taskkill / kill -9);
+    // that's not a debugger responsibility so no terminate tool is exposed.
+
+    [McpServerTool(Name = "debug_go")]
     [Description("[LIVE] Continue the target (like WinDbg `g`).")]
     public static object Go(AgentRegistry reg, string? agent = null)
         => reg.Get(agent).Result("session.go")!;
 
-    [McpServerTool(Name = "live_session_pause")]
+    [McpServerTool(Name = "debug_pause")]
     [Description("[LIVE] Break (pause) the target.")]
     public static object Pause(AgentRegistry reg, string? agent = null)
         => reg.Get(agent).Result("session.pause")!;
 
-    [McpServerTool(Name = "live_session_terminate")]
-    [Description("[LIVE] Terminate the target process (destructive).")]
-    public static object Terminate(AgentRegistry reg, string? agent = null)
-        => reg.Get(agent).Result("session.terminate")!;
-
-    [McpServerTool(Name = "live_wait_paused")]
+    [McpServerTool(Name = "debug_wait_paused")]
     [Description("[LIVE] Wait until the target enters Paused (breakpoint / step). Params: timeoutMs=5000.")]
     public static object WaitPaused(AgentRegistry reg, int timeoutMs = 5000, string? agent = null)
         => reg.Get(agent).Result("debug.wait_paused", new { timeoutMs })!;
 
     // ---- threads / stack ------------------------------------------------
 
-    [McpServerTool(Name = "live_thread_list")]
+    [McpServerTool(Name = "debug_thread_list")]
     [Description("[LIVE] List managed threads in the target process (paginated). Params: offset=0, max=200.")]
     public static object ThreadList(AgentRegistry reg, int offset = 0, int max = 200, string? agent = null)
         => Paging.PageJsonArray(reg.Get(agent).Result("thread.list"), offset, max);
 
-    [McpServerTool(Name = "live_thread_stack")]
+    [McpServerTool(Name = "debug_thread_stack")]
     [Description("[LIVE] Walk a thread's managed call stack (paginated). Params: threadId:int, offset=0, max=200. Agent walks up to (offset+max); MCP slices to envelope.")]
     public static object ThreadStack(AgentRegistry reg, int threadId, int offset = 0, int max = 200, string? agent = null)
     {
@@ -121,80 +146,80 @@ public static class LiveDebugTools
         return Paging.PageJsonArray(reg.Get(agent).Result("thread.stack", new { threadId, max = fetch }), offset, max);
     }
 
-    [McpServerTool(Name = "live_thread_current")]
+    [McpServerTool(Name = "debug_thread_current")]
     [Description("[LIVE] Return which thread triggered the last pause.")]
     public static object CurrentThread(AgentRegistry reg, string? agent = null)
         => reg.Get(agent).Result("thread.current")!;
 
     // ---- modules --------------------------------------------------------
 
-    [McpServerTool(Name = "live_list_modules")]
+    [McpServerTool(Name = "debug_list_modules")]
     [Description("[LIVE] List managed modules currently loaded in the attached process (paginated). Params: offset=0, max=200.")]
     public static object ListModules(AgentRegistry reg, int offset = 0, int max = 200, string? agent = null)
         => Paging.PageJsonArray(reg.Get(agent).Result("module.list_live"), offset, max);
 
-    [McpServerTool(Name = "live_find_type")]
+    [McpServerTool(Name = "debug_find_type")]
     [Description("[LIVE] Find a type by full name across all loaded modules (paginated). Returns module path + typeDef token. Params: typeFullName, offset=0, max=200.")]
     public static object FindType(AgentRegistry reg, string typeFullName, int offset = 0, int max = 200, string? agent = null)
         => Paging.PageJsonArray(reg.Get(agent).Result("module.find_type_live", new { typeFullName }), offset, max);
 
-    [McpServerTool(Name = "live_list_type_methods")]
+    [McpServerTool(Name = "debug_list_type_methods")]
     [Description("[LIVE] Enumerate methods of a type inside a loaded module (paginated). Params: modulePath (path suffix ok), typeFullName, offset=0, max=200.")]
     public static object ListTypeMethods(AgentRegistry reg, string modulePath, string typeFullName, int offset = 0, int max = 200, string? agent = null)
         => Paging.PageJsonArray(reg.Get(agent).Result("module.list_type_methods", new { modulePath, typeFullName }), offset, max);
 
     // ---- breakpoints ----------------------------------------------------
 
-    [McpServerTool(Name = "live_bp_set_il")]
+    [McpServerTool(Name = "debug_bp_set_il")]
     [Description("[LIVE] Set an IL-offset breakpoint. Params: modulePath (suffix ok), token:uint, offset:uint=0.")]
     public static object BpSetIl(AgentRegistry reg, string modulePath, uint token, uint offset = 0, string? agent = null)
         => reg.Get(agent).Result("bp.set_il", new { modulePath, token, offset })!;
 
-    [McpServerTool(Name = "live_bp_set_by_name")]
+    [McpServerTool(Name = "debug_bp_set_by_name")]
     [Description("[LIVE] Set a breakpoint at IL=0 of a named method. Params: modulePath, typeFullName, methodName, overloadIndex=0.")]
     public static object BpSetByName(AgentRegistry reg, string modulePath, string typeFullName, string methodName, int overloadIndex = 0, string? agent = null)
         => reg.Get(agent).Result("bp.set_by_name", new { modulePath, typeFullName, methodName, overloadIndex })!;
 
-    [McpServerTool(Name = "live_bp_list")]
+    [McpServerTool(Name = "debug_bp_list")]
     [Description("[LIVE] List all breakpoints currently registered on the agent (paginated). Params: offset=0, max=200.")]
     public static object BpList(AgentRegistry reg, int offset = 0, int max = 200, string? agent = null)
         => Paging.PageJsonArray(reg.Get(agent).Result("bp.list"), offset, max);
 
-    [McpServerTool(Name = "live_bp_delete")]
+    [McpServerTool(Name = "debug_bp_delete")]
     [Description("[LIVE] Delete a breakpoint by id.")]
     public static object BpDelete(AgentRegistry reg, int id, string? agent = null)
         => reg.Get(agent).Result("bp.delete", new { id })!;
 
-    [McpServerTool(Name = "live_bp_enable")]
+    [McpServerTool(Name = "debug_bp_enable")]
     [Description("[LIVE] Enable a breakpoint by id.")]
     public static object BpEnable(AgentRegistry reg, int id, string? agent = null)
         => reg.Get(agent).Result("bp.enable", new { id })!;
 
-    [McpServerTool(Name = "live_bp_disable")]
+    [McpServerTool(Name = "debug_bp_disable")]
     [Description("[LIVE] Disable a breakpoint by id (kept registered, just not active).")]
     public static object BpDisable(AgentRegistry reg, int id, string? agent = null)
         => reg.Get(agent).Result("bp.disable", new { id })!;
 
     // ---- stepping -------------------------------------------------------
 
-    [McpServerTool(Name = "live_step_in")]
+    [McpServerTool(Name = "debug_step_in")]
     [Description("[LIVE] Step into the next IL instruction on the current thread. Blocks until step completes or timeoutMs (default 5000).")]
     public static object StepIn(AgentRegistry reg, int timeoutMs = 5000, string? agent = null)
         => reg.Get(agent).Result("step.in", new { timeoutMs })!;
 
-    [McpServerTool(Name = "live_step_over")]
+    [McpServerTool(Name = "debug_step_over")]
     [Description("[LIVE] Step over the next IL instruction on the current thread.")]
     public static object StepOver(AgentRegistry reg, int timeoutMs = 5000, string? agent = null)
         => reg.Get(agent).Result("step.over", new { timeoutMs })!;
 
-    [McpServerTool(Name = "live_step_out")]
+    [McpServerTool(Name = "debug_step_out")]
     [Description("[LIVE] Step out of the current function.")]
     public static object StepOut(AgentRegistry reg, int timeoutMs = 5000, string? agent = null)
         => reg.Get(agent).Result("step.out", new { timeoutMs })!;
 
     // ---- heap / memory --------------------------------------------------
 
-    [McpServerTool(Name = "live_heap_find_instances")]
+    [McpServerTool(Name = "debug_heap_find_instances")]
     [Description("[LIVE/DUMP] Find managed object addresses by type name (substring ok, paginated). Params: typeName, offset=0, max=200. Agent walks heap up to (offset+max); MCP slices to envelope. Bump offset to continue past truncation.")]
     public static object HeapFind(AgentRegistry reg, string typeName, int offset = 0, int max = 200, string? agent = null)
     {
@@ -202,37 +227,37 @@ public static class LiveDebugTools
         return Paging.PageJsonArray(reg.Get(agent).Result("heap.find_instances", new { typeName, max = fetch }), offset, max);
     }
 
-    [McpServerTool(Name = "live_heap_read_object")]
+    [McpServerTool(Name = "debug_heap_read_object")]
     [Description("[LIVE/DUMP] Dump fields of a managed object. Params: address:ulong, maxFields=64.")]
     public static object HeapReadObject(AgentRegistry reg, ulong address, int maxFields = 64, string? agent = null)
         => reg.Get(agent).Result("heap.read_object", new { address, maxFields })!;
 
-    [McpServerTool(Name = "live_heap_read_string")]
+    [McpServerTool(Name = "debug_heap_read_string")]
     [Description("[LIVE/DUMP] Read a System.String at a managed address.")]
     public static object HeapReadString(AgentRegistry reg, ulong address, string? agent = null)
         => reg.Get(agent).Result("heap.read_string", new { address })!;
 
-    [McpServerTool(Name = "live_heap_stats")]
+    [McpServerTool(Name = "debug_heap_stats")]
     [Description("[LIVE/DUMP] Top-N types on the managed heap by total size (paginated). Params: top=25 (agent-side), offset=0, max=200 (MCP envelope cap).")]
     public static object HeapStats(AgentRegistry reg, int top = 25, int offset = 0, int max = 200, string? agent = null)
         => Paging.PageJsonArray(reg.Get(agent).Result("heap.stats", new { top }), offset, max);
 
-    [McpServerTool(Name = "live_memory_read")]
+    [McpServerTool(Name = "debug_memory_read")]
     [Description("[LIVE/DUMP] Read raw bytes (returned as hex) at a virtual address. Params: address:ulong, size:int (1..1MB).")]
     public static object MemoryRead(AgentRegistry reg, ulong address, int size, string? agent = null)
         => reg.Get(agent).Result("memory.read", new { address, size })!;
 
-    [McpServerTool(Name = "live_memory_write")]
-    [Description("[LIVE] Write raw bytes (hex string) at a virtual address — live edit against the running process, not a file patch. Use file_patch_bytes for on-disk edits.")]
+    [McpServerTool(Name = "debug_memory_write")]
+    [Description("[LIVE] Write raw bytes (hex string) at a virtual address — live edit against the running process, not a file patch. Use reverse_patch_bytes for on-disk edits.")]
     public static object MemoryWrite(AgentRegistry reg, ulong address, string hex, string? agent = null)
         => reg.Get(agent).Result("memory.write", new { address, hex })!;
 
-    [McpServerTool(Name = "live_memory_read_int")]
+    [McpServerTool(Name = "debug_memory_read_int")]
     [Description("[LIVE/DUMP] Read a typed integer from memory. kind in {i8,u8,i16,u16,i32,u32,i64,u64}, default 'i32'.")]
     public static object MemoryReadInt(AgentRegistry reg, ulong address, string kind = "i32", string? agent = null)
         => reg.Get(agent).Result("memory.read_int", new { address, kind })!;
 
-    [McpServerTool(Name = "live_disasm")]
+    [McpServerTool(Name = "debug_disasm")]
     [Description("[LIVE/DUMP] Disassemble x64 bytes at a virtual address via Iced. Params: address:ulong, size=128.")]
     public static object Disasm(AgentRegistry reg, ulong address, int size = 128, string? agent = null)
         => reg.Get(agent).Result("memory.disasm", new { address, size })!;

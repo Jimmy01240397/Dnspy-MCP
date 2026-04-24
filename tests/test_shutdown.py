@@ -72,10 +72,10 @@ def test_shutdown_releases_opened_asm(tmp_path_factory, testtarget_asm: Path):
 
         client = MCPClient(f"http://127.0.0.1:{port}/mcp")
         client.initialize()
-        r = client.call_json("asm_file_open", {"asmPath": str(copy)})
+        r = client.call_json("reverse_open", {"asmPath": str(copy)})
         assert r["path"].lower() == str(copy).lower()
 
-        # do NOT call asm_file_close — shutdown must clean up the lock itself
+        # do NOT call reverse_close — shutdown must clean up the lock itself
     finally:
         rc = _graceful_stop(proc)
         assert rc == 0, f"mcp exited with code {rc}"
@@ -98,8 +98,8 @@ def test_shutdown_closes_agent_connections(agent_proc):
         _wait_port("127.0.0.1", port, timeout=20.0, label="mcp shutdown agent")
         client = MCPClient(f"http://127.0.0.1:{port}/mcp")
         client.initialize()
-        r = client.call_json("live_agent_open", {"host": AGENT_HOST, "port": AGENT_PORT})
-        assert r["opened"]
+        r = client.call_json("debug_session_connect", {"host": AGENT_HOST, "port": AGENT_PORT})
+        assert r["connected"]
     finally:
         rc = _graceful_stop(proc)
         assert rc == 0, f"mcp exited with code {rc}"

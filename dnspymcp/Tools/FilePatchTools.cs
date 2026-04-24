@@ -10,12 +10,12 @@ namespace DnSpyMcp.Tools;
 
 /// <summary>
 /// Static / on-disk patch tools. These modify the *file*, not a running process.
-/// For live memory edits, use live_memory_write instead.
+/// For live memory edits, use debug_memory_write instead.
 /// </summary>
 [McpServerToolType]
 public static class FilePatchTools
 {
-    [McpServerTool(Name = "file_patch_il_nop")]
+    [McpServerTool(Name = "reverse_patch_il_nop")]
     [Description("[FILE] Replace a range of IL instructions with nops and save to outputPath. Params: typeFullName, methodName, startOffset, endOffset (inclusive), outputPath, asmPath (optional), overloadIndex=0.")]
     public static object PatchIlNop(Workspace ws, string typeFullName, string methodName,
                                     int startOffset, int endOffset, string outputPath, string? asmPath = null, int overloadIndex = 0)
@@ -41,7 +41,7 @@ public static class FilePatchTools
         return new { changedInstructions = changed, written = outputPath };
     }
 
-    [McpServerTool(Name = "file_patch_bytes")]
+    [McpServerTool(Name = "reverse_patch_bytes")]
     [Description("[FILE] Overwrite raw file bytes at a given file offset. Params: filePath (any binary), offset:long, hex:string. Returns {written}.")]
     public static object PatchBytes(string filePath, long offset, string hex)
     {
@@ -56,7 +56,7 @@ public static class FilePatchTools
         return new { written = data.Length, filePath, offset };
     }
 
-    [McpServerTool(Name = "file_save_assembly")]
+    [McpServerTool(Name = "reverse_save_assembly")]
     [Description("[FILE] Write the in-memory ModuleDef (with your patches) back to a new path. Params: outputPath, asmPath (optional).")]
     public static object SaveAssembly(Workspace ws, string outputPath, string? asmPath = null)
     {
