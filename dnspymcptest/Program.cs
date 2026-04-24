@@ -75,6 +75,52 @@ internal static class Program
     }
 }
 
+// Tiny inheritance hierarchy used by the reverse_subtypes / *_overrides /
+// *_overridden_by_base tests. Not exercised at runtime — exists purely so
+// the metadata has a virtual base + override pair to query.
+public abstract class Animal
+{
+    public abstract string Speak();
+    public virtual string Habitat => "earth";
+}
+
+// Interface + impl for reverse_interface_*_implemented_by tests.
+public interface IPet
+{
+    string Nickname { get; }
+    event EventHandler<string>? Renamed;
+    void Pat();
+}
+
+[Tag("ExampleCat")]
+public sealed class Cat : Animal, IPet
+{
+    public override string Speak() => "meow";
+    public override string Habitat => "indoor";
+
+    public string Nickname => "Mr. Whiskers";
+    public event EventHandler<string>? Renamed;
+    public void Pat()
+    {
+        Renamed?.Invoke(this, Nickname);
+    }
+}
+
+// Static class + extension method for reverse_type_extension_methods tests.
+public static class CatExtensions
+{
+    public static string Describe(this Cat cat) => $"{cat.Nickname} ({cat.Habitat})";
+}
+
+// Custom attribute used by reverse_find_attribute_usage tests — defined in
+// the test target so it resolves through ResolveTypes(workspace).
+[AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+public sealed class TagAttribute : Attribute
+{
+    public string Name { get; }
+    public TagAttribute(string name) => Name = name;
+}
+
 public sealed class Widget
 {
     public string Name { get; }

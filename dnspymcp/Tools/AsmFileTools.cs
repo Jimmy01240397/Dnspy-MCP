@@ -456,4 +456,280 @@ public static class AsmFileTools
         public bool Equals(MethodDef? x, MethodDef? y) => ReferenceEquals(x, y);
         public int GetHashCode(MethodDef obj) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
     }
+
+    // ---- shared helpers for analyzer-node tools (Phase 5+) -----------------
+
+    /// <summary>Resolve every TypeDef matching <paramref name="typeFullName"/> across the workspace (or only inside <paramref name="onlyAsmPath"/>).</summary>
+    private static IEnumerable<TypeDef> ResolveTypes(Workspace ws, string typeFullName, string? onlyAsmPath)
+    {
+        IEnumerable<Workspace.OpenedAsm> scope = ws.All;
+        if (!string.IsNullOrEmpty(onlyAsmPath))
+            scope = new[] { ws.Get(onlyAsmPath) };
+        foreach (var asm in scope)
+            foreach (var t in asm.Module.GetTypes())
+                if (t.FullName == typeFullName) yield return t;
+    }
+
+    /// <summary>Resolve fields matching either a full sig (<c>T A.B::F</c>) or shorthand (<c>A.B.F</c>).</summary>
+    private static IEnumerable<FieldDef> ResolveFields(Workspace ws, string target, string? onlyAsmPath)
+    {
+        bool isSignature = target.Contains("::");
+        string? declTypeName = null;
+        string? fieldName = null;
+        if (!isSignature)
+        {
+            int dot = target.LastIndexOf('.');
+            if (dot > 0) { declTypeName = target.Substring(0, dot); fieldName = target.Substring(dot + 1); }
+            else fieldName = target;
+        }
+        IEnumerable<Workspace.OpenedAsm> scope = ws.All;
+        if (!string.IsNullOrEmpty(onlyAsmPath))
+            scope = new[] { ws.Get(onlyAsmPath) };
+        foreach (var asm in scope)
+            foreach (var t in asm.Module.GetTypes())
+            {
+                if (declTypeName != null && t.FullName != declTypeName) continue;
+                foreach (var f in t.Fields)
+                    if (isSignature ? f.FullName == target : f.Name == fieldName)
+                        yield return f;
+            }
+    }
+
+    /// <summary>Resolve properties on a given type (<c>typeFullName</c> + <c>name</c>).</summary>
+    private static IEnumerable<PropertyDef> ResolveProperties(Workspace ws, string typeFullName, string name, string? onlyAsmPath)
+    {
+        foreach (var t in ResolveTypes(ws, typeFullName, onlyAsmPath))
+            foreach (var p in t.Properties)
+                if (p.Name == name) yield return p;
+    }
+
+    /// <summary>Resolve events on a given type.</summary>
+    private static IEnumerable<EventDef> ResolveEvents(Workspace ws, string typeFullName, string name, string? onlyAsmPath)
+    {
+        foreach (var t in ResolveTypes(ws, typeFullName, onlyAsmPath))
+            foreach (var e in t.Events)
+                if (e.Name == name) yield return e;
+    }
+
+    /// <summary>
+    /// Map a dnSpy <see cref="EntityNode"/> result row into the JSON shape
+    /// every analyzer-driven MCP tool returns. EntityNode.Member is the
+    /// site that uses the target; SourceRef (when present) carries the
+    /// containing method + IL offset of the actual instruction.
+    /// </summary>
+    internal static object MapEntityRow(EntityNode en)
+    {
+        var member = en.Member;
+        var src = en.SourceRef;
+        var declType = member?.DeclaringType?.FullName;
+        var asmPath = member?.Module?.Location ?? src?.Method?.Module?.Location ?? "";
+        return new
+        {
+            asm = asmPath,
+            declaringType = declType,
+            memberName = member?.Name?.ToString(),
+            memberFullName = member?.FullName,
+            token = member?.MDToken.Raw,
+            inMethod = src?.Method?.FullName,
+            ilOffset = src?.ILOffset,
+        };
+    }
+
+    /// <summary>
+    /// Run dnSpy's analyzer node(s) for every resolved target, dedupe hits by
+    /// reference, and return a paged response. Centralises the boilerplate
+    /// shared by every analyzer-backed reverse_* tool: resolution, error
+    /// when nothing matched, drive, dedupe, map, page.
+    /// </summary>
+    private static object RunAnalyzer<T>(
+        Workspace ws,
+        IEnumerable<T> resolved,
+        string notFoundLabel,
+        Func<T, IEnumerable<SearchNode>> nodeFactory,
+        int offset, int max)
+    {
+        var list = resolved.ToList();
+        if (list.Count == 0) throw new McpException(notFoundLabel);
+        var hits = new List<object>();
+        var seen = new HashSet<IMemberRef>(MemberRefComparer.Instance);
+        foreach (var target in list)
+        {
+            foreach (var node in nodeFactory(target))
+                foreach (var en in AnalyzerDriver.Drive(node, ws, CancellationToken.None))
+                {
+                    if (en.Member is null || !seen.Add(en.Member)) continue;
+                    hits.Add(MapEntityRow(en));
+                }
+        }
+        return Paging.Page(hits, offset, max);
+    }
+
+    [McpServerTool(Name = "reverse_xref_to_type")]
+    [Description("[REVERSE] Find every member (method/field/property/event/type) that references the given type — base/interface/field-type/parameter/return/local/catch/typeof/cast/CustomAttribute. Powered by dnSpy's TypeUsedByNode + ScopedWhereUsedAnalyzer engine across all opened assemblies. Params: typeFullName (e.g. 'Ns.MyClass'), asmPath (optional), offset=0, max=200.")]
+    public static object XrefToType(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveTypes(ws, typeFullName, asmPath),
+            $"type not found: {typeFullName}",
+            t => new[] { (SearchNode)new TypeUsedByNode(t) }, offset, max);
+
+    [McpServerTool(Name = "reverse_xref_to_field")]
+    [Description("[REVERSE] Find every method that reads or writes a field. Powered by dnSpy's FieldAccessNode + ScopedWhereUsedAnalyzer engine. Pass writesOnly=true to restrict to write sites (stfld/stsfld); default returns both reads and writes. fieldFullName accepts full sig 'T A.B::F' or shorthand 'A.B.F'. Params: fieldFullName, writesOnly=false, asmPath (optional), offset=0, max=200.")]
+    public static object XrefToField(Workspace ws, string fieldFullName, bool writesOnly = false, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveFields(ws, fieldFullName, asmPath),
+            $"field not found: {fieldFullName}",
+            f => writesOnly
+                ? new[] { (SearchNode)new FieldAccessNode(f, showWrites: true) }
+                : new[] { (SearchNode)new FieldAccessNode(f, showWrites: true), new FieldAccessNode(f, showWrites: false) },
+            offset, max);
+
+    [McpServerTool(Name = "reverse_xref_type_instantiations")]
+    [Description("[REVERSE] Find every newobj / .ctor invocation that constructs an instance of the given type. Powered by dnSpy's TypeInstantiationsNode. Distinct from xref_to_type which catches all references. Params: typeFullName, asmPath (optional), offset=0, max=200.")]
+    public static object XrefTypeInstantiations(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveTypes(ws, typeFullName, asmPath),
+            $"type not found: {typeFullName}",
+            t => new[] { (SearchNode)new TypeInstantiationsNode(t) }, offset, max);
+
+    // ---- Phase 5c: subtypes + override chains ------------------------------
+
+    [McpServerTool(Name = "reverse_subtypes")]
+    [Description("[REVERSE] Find every type that derives from the given base type or implements the given interface. Powered by dnSpy's SubtypesNode. Params: typeFullName, asmPath (optional), offset=0, max=200.")]
+    public static object Subtypes(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveTypes(ws, typeFullName, asmPath),
+            $"type not found: {typeFullName}",
+            t => new[] { (SearchNode)new SubtypesNode(t) }, offset, max);
+
+    [McpServerTool(Name = "reverse_method_overrides")]
+    [Description("[REVERSE] Find every method that overrides the given virtual method (i.e., methods in derived types that this method's overrides). Powered by dnSpy's MethodOverridesNode. Params: targetFullName (full sig or shorthand), asmPath (optional), offset=0, max=200.")]
+    public static object MethodOverrides(Workspace ws, string targetFullName, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveMethods(ws, targetFullName, asmPath),
+            $"method not found: {targetFullName}",
+            m => new[] { (SearchNode)new MethodOverridesNode(m) }, offset, max);
+
+    [McpServerTool(Name = "reverse_method_overridden_by_base")]
+    [Description("[REVERSE] Find every base-class virtual method that the given method overrides (the method's `base.X` chain). Powered by dnSpy's MethodOverriddenNode. Params: targetFullName, asmPath (optional), offset=0, max=200.")]
+    public static object MethodOverriddenBy(Workspace ws, string targetFullName, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveMethods(ws, targetFullName, asmPath),
+            $"method not found: {targetFullName}",
+            m => new[] { (SearchNode)new MethodOverriddenNode(m) }, offset, max);
+
+    [McpServerTool(Name = "reverse_property_overrides")]
+    [Description("[REVERSE] Find every property that overrides the given virtual property. Powered by dnSpy's PropertyOverridesNode. Params: typeFullName, name, asmPath (optional), offset=0, max=200.")]
+    public static object PropertyOverrides(Workspace ws, string typeFullName, string name, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveProperties(ws, typeFullName, name, asmPath),
+            $"property not found: {typeFullName}::{name}",
+            p => new[] { (SearchNode)new PropertyOverridesNode(p) }, offset, max);
+
+    [McpServerTool(Name = "reverse_property_overridden_by_base")]
+    [Description("[REVERSE] Find the base-class virtual property the given property overrides. Powered by dnSpy's PropertyOverriddenNode. Params: typeFullName, name, asmPath (optional), offset=0, max=200.")]
+    public static object PropertyOverriddenBy(Workspace ws, string typeFullName, string name, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveProperties(ws, typeFullName, name, asmPath),
+            $"property not found: {typeFullName}::{name}",
+            p => new[] { (SearchNode)new PropertyOverriddenNode(p) }, offset, max);
+
+    [McpServerTool(Name = "reverse_event_overrides")]
+    [Description("[REVERSE] Find every event that overrides the given virtual event. Powered by dnSpy's EventOverridesNode. Params: typeFullName, name, asmPath (optional), offset=0, max=200.")]
+    public static object EventOverrides(Workspace ws, string typeFullName, string name, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveEvents(ws, typeFullName, name, asmPath),
+            $"event not found: {typeFullName}::{name}",
+            e => new[] { (SearchNode)new EventOverridesNode(e) }, offset, max);
+
+    [McpServerTool(Name = "reverse_event_overridden_by_base")]
+    [Description("[REVERSE] Find the base-class virtual event the given event overrides. Powered by dnSpy's EventOverriddenNode. Params: typeFullName, name, asmPath (optional), offset=0, max=200.")]
+    public static object EventOverriddenBy(Workspace ws, string typeFullName, string name, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveEvents(ws, typeFullName, name, asmPath),
+            $"event not found: {typeFullName}::{name}",
+            e => new[] { (SearchNode)new EventOverriddenNode(e) }, offset, max);
+
+    // ---- Phase 5d: outgoing calls + attribute applied-to ------------------
+
+    [McpServerTool(Name = "reverse_method_calls")]
+    [Description("[REVERSE] List every method/field/property/event the given method REFERENCES from its body — the inverse of xref_to_method (this is calls FROM the target). Powered by dnSpy's MethodUsesNode. Params: targetFullName (full sig or shorthand), asmPath (optional), offset=0, max=200.")]
+    public static object MethodCalls(Workspace ws, string targetFullName, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveMethods(ws, targetFullName, asmPath),
+            $"method not found: {targetFullName}",
+            m => new[] { (SearchNode)new MethodUsesNode(m) }, offset, max);
+
+    // ---- Phase 5e: property/event/interface-impl/type-exposed/extensions --
+
+    [McpServerTool(Name = "reverse_xref_to_property")]
+    [Description("[REVERSE] Find every member that calls the getter or setter of a property. Internally runs MethodUsedByNode on each accessor (matching dnSpy's 'Analyze' panel for properties). Params: typeFullName, name, asmPath (optional), offset=0, max=200.")]
+    public static object XrefToProperty(Workspace ws, string typeFullName, string name, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveProperties(ws, typeFullName, name, asmPath),
+            $"property not found: {typeFullName}::{name}",
+            p =>
+            {
+                var nodes = new List<SearchNode>();
+                if (p.GetMethod != null) nodes.Add(new MethodUsedByNode(p.GetMethod, isSetter: false));
+                if (p.SetMethod != null) nodes.Add(new MethodUsedByNode(p.SetMethod, isSetter: true));
+                return nodes;
+            }, offset, max);
+
+    [McpServerTool(Name = "reverse_xref_to_event")]
+    [Description("[REVERSE] Find every member that subscribes/unsubscribes/raises a given event. Internally runs MethodUsedByNode on add / remove / raise accessors. Params: typeFullName, name, asmPath (optional), offset=0, max=200.")]
+    public static object XrefToEvent(Workspace ws, string typeFullName, string name, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveEvents(ws, typeFullName, name, asmPath),
+            $"event not found: {typeFullName}::{name}",
+            e =>
+            {
+                var nodes = new List<SearchNode>();
+                if (e.AddMethod != null) nodes.Add(new MethodUsedByNode(e.AddMethod, isSetter: false));
+                if (e.RemoveMethod != null) nodes.Add(new MethodUsedByNode(e.RemoveMethod, isSetter: false));
+                if (e.InvokeMethod != null) nodes.Add(new MethodUsedByNode(e.InvokeMethod, isSetter: false));
+                return nodes;
+            }, offset, max);
+
+    [McpServerTool(Name = "reverse_event_fired_by")]
+    [Description("[REVERSE] Find every method that raises the given event (callvirt on its Invoke / synthesized backing-delegate Invoke). Powered by dnSpy's EventFiredByNode. Params: typeFullName, name, asmPath (optional), offset=0, max=200.")]
+    public static object EventFiredBy(Workspace ws, string typeFullName, string name, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveEvents(ws, typeFullName, name, asmPath),
+            $"event not found: {typeFullName}::{name}",
+            e => new[] { (SearchNode)new EventFiredByNode(e) }, offset, max);
+
+    [McpServerTool(Name = "reverse_interface_method_implemented_by")]
+    [Description("[REVERSE] Given an interface method, find every concrete method implementing it. Powered by dnSpy's InterfaceMethodImplementedByNode. Params: targetFullName, asmPath (optional), offset=0, max=200.")]
+    public static object InterfaceMethodImplementedBy(Workspace ws, string targetFullName, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveMethods(ws, targetFullName, asmPath),
+            $"method not found: {targetFullName}",
+            m => new[] { (SearchNode)new InterfaceMethodImplementedByNode(m) }, offset, max);
+
+    [McpServerTool(Name = "reverse_interface_property_implemented_by")]
+    [Description("[REVERSE] Given an interface property, find every concrete property implementing it. Powered by dnSpy's InterfacePropertyImplementedByNode. Params: typeFullName, name, asmPath (optional), offset=0, max=200.")]
+    public static object InterfacePropertyImplementedBy(Workspace ws, string typeFullName, string name, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveProperties(ws, typeFullName, name, asmPath),
+            $"property not found: {typeFullName}::{name}",
+            p => new[] { (SearchNode)new InterfacePropertyImplementedByNode(p) }, offset, max);
+
+    [McpServerTool(Name = "reverse_interface_event_implemented_by")]
+    [Description("[REVERSE] Given an interface event, find every concrete event implementing it. Powered by dnSpy's InterfaceEventImplementedByNode. Params: typeFullName, name, asmPath (optional), offset=0, max=200.")]
+    public static object InterfaceEventImplementedBy(Workspace ws, string typeFullName, string name, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveEvents(ws, typeFullName, name, asmPath),
+            $"event not found: {typeFullName}::{name}",
+            e => new[] { (SearchNode)new InterfaceEventImplementedByNode(e) }, offset, max);
+
+    [McpServerTool(Name = "reverse_type_exposed_by")]
+    [Description("[REVERSE] Find every method/field/property/event whose PUBLIC SURFACE (parameter / return / property type / field type) exposes the given type — useful for API-surface auditing. Powered by dnSpy's TypeExposedByNode. Params: typeFullName, asmPath (optional), offset=0, max=200.")]
+    public static object TypeExposedBy(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveTypes(ws, typeFullName, asmPath),
+            $"type not found: {typeFullName}",
+            t => new[] { (SearchNode)new TypeExposedByNode(t) }, offset, max);
+
+    [McpServerTool(Name = "reverse_type_extension_methods")]
+    [Description("[REVERSE] Find every extension method declared `this T x, ...` for the given type. Powered by dnSpy's TypeExtensionMethodsNode. Params: typeFullName, asmPath (optional), offset=0, max=200.")]
+    public static object TypeExtensionMethods(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveTypes(ws, typeFullName, asmPath),
+            $"type not found: {typeFullName}",
+            t => new[] { (SearchNode)new TypeExtensionMethodsNode(t) }, offset, max);
+
+    [McpServerTool(Name = "reverse_find_attribute_usage")]
+    [Description("[REVERSE] Find every type/method/field/property/event/parameter/return/assembly/module decorated with the given attribute type (and instances of attribute fields/properties). Powered by dnSpy's AttributeAppliedToNode. Use it for surveys like '[Obsolete] usage' or '[Serializable] usage'. Params: attributeTypeFullName (e.g. 'System.ObsoleteAttribute'), asmPath (optional), offset=0, max=200.")]
+    public static object FindAttributeUsage(Workspace ws, string attributeTypeFullName, string? asmPath = null, int offset = 0, int max = 200)
+        => RunAnalyzer(ws, ResolveTypes(ws, attributeTypeFullName, asmPath),
+            $"attribute type not found: {attributeTypeFullName}",
+            t => new[] { (SearchNode)new AttributeAppliedToNode(t) }, offset, max);
+
+    private sealed class MemberRefComparer : IEqualityComparer<IMemberRef>
+    {
+        public static readonly MemberRefComparer Instance = new();
+        public bool Equals(IMemberRef? x, IMemberRef? y) => ReferenceEquals(x, y);
+        public int GetHashCode(IMemberRef obj) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
+    }
 }
