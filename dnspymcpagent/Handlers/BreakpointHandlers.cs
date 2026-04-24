@@ -13,32 +13,38 @@ public static class BreakpointHandlers
     public static void Register(Dispatcher d)
     {
         d.Register("bp.set_il",
-            "[DEBUG] Set an IL-offset breakpoint. Params: {modulePath:string, token:uint, offset?:uint=0}. modulePath matches DnModule.Name suffix (case-insensitive).",
+            "[DEBUG] Set an IL-offset breakpoint. Params: {modulePath:string, token:uint, offset?:uint=0, condition?:string}. modulePath matches DnModule.Name suffix (case-insensitive). condition format: `count <op> N` (op: ==/!=/>=/<=/>/<). Example: \"count >= 5\" pauses on the 5th hit and every hit after.",
             p => Program.Session.OnDbg(() =>
             {
                 var modulePath = Dispatcher.Req<string>(p, "modulePath");
                 var token = Dispatcher.Req<uint>(p, "token");
                 var offset = Dispatcher.Opt<uint>(p, "offset", 0);
+                var condition = Dispatcher.Opt<string?>(p, "condition", null);
 
                 var mod = FindModule(modulePath)
                     ?? throw new ArgumentException($"module not found: {modulePath}");
 
-                var bp = Program.Session.DnDebugger.CreateBreakpoint(mod.DnModuleId, token, offset, null);
+                var entryRef = new BreakpointEntryRef();
+                var cond = BuildCountCondition(condition, entryRef);
+                var bp = Program.Session.DnDebugger.CreateBreakpoint(mod.DnModuleId, token, offset, cond);
                 var entry = Program.Session.Breakpoints.Add(
                     "il",
                     $"IL bp {Path.GetFileName(mod.Name)}!0x{token:X8}+{offset}",
                     bp);
+                entry.Condition = condition;
+                entryRef.Entry = entry;
                 return Describe(entry);
             }));
 
         d.Register("bp.set_by_name",
-            "[DEBUG] Set a breakpoint at IL=0 of a method identified by type and method name. Params: {modulePath:string, typeFullName:string, methodName:string, overloadIndex?:int=0}.",
+            "[DEBUG] Set a breakpoint at IL=0 of a method identified by type and method name. Params: {modulePath:string, typeFullName:string, methodName:string, overloadIndex?:int=0, condition?:string}. condition format: `count <op> N` (op: ==/!=/>=/<=/>/<). Example: \"count >= 5\" pauses on the 5th hit and beyond.",
             p => Program.Session.OnDbg(() =>
             {
                 var modulePath = Dispatcher.Req<string>(p, "modulePath");
                 var typeFullName = Dispatcher.Req<string>(p, "typeFullName");
                 var methodName = Dispatcher.Req<string>(p, "methodName");
                 var overloadIndex = Dispatcher.Opt<int>(p, "overloadIndex", 0);
+                var condition = Dispatcher.Opt<string?>(p, "condition", null);
 
                 var mod = FindModule(modulePath)
                     ?? throw new ArgumentException($"module not found: {modulePath}");
@@ -50,11 +56,15 @@ public static class BreakpointHandlers
                 var methodToken = MetaDataUtils.FindMethodByName(mdi, typeToken, methodName, overloadIndex);
                 if (methodToken == 0) throw new ArgumentException($"method not found: {typeFullName}::{methodName} (overload {overloadIndex})");
 
-                var bp = Program.Session.DnDebugger.CreateBreakpoint(mod.DnModuleId, methodToken, 0, null);
+                var entryRef = new BreakpointEntryRef();
+                var cond = BuildCountCondition(condition, entryRef);
+                var bp = Program.Session.DnDebugger.CreateBreakpoint(mod.DnModuleId, methodToken, 0, cond);
                 var entry = Program.Session.Breakpoints.Add(
                     "by_name",
                     $"{typeFullName}::{methodName} [token=0x{methodToken:X8}]",
                     bp);
+                entry.Condition = condition;
+                entryRef.Entry = entry;
                 return Describe(entry);
             }));
 
@@ -79,7 +89,7 @@ public static class BreakpointHandlers
             }));
 
         d.Register("bp.list",
-            "[DEBUG] List all breakpoints registered on this agent (id, kind, description, enabled).",
+            "[DEBUG] List all breakpoints registered on this agent. Rows: {id, kind, description, enabled, condition, hitCount}.",
             _ =>
             {
                 var rows = new List<object>();
@@ -124,7 +134,67 @@ public static class BreakpointHandlers
         kind = e.Kind,
         description = e.Description,
         enabled = e.Enabled,
+        condition = e.Condition,
+        hitCount = e.HitCount,
     };
+
+    /// <summary>
+    /// Forward-reference holder so the condition closure can find its
+    /// BreakpointEntry after the entry is created. Avoids a chicken-and-egg
+    /// problem (CreateBreakpoint needs the callback; the callback needs the
+    /// entry; the entry is built from the bp returned by CreateBreakpoint).
+    /// </summary>
+    private sealed class BreakpointEntryRef { public Services.BreakpointEntry? Entry; }
+
+    /// <summary>
+    /// Parse a "count &lt;op&gt; N" condition string into an ICorDebug
+    /// breakpoint-condition callback. Returns null when condition is null
+    /// or whitespace (use unconditional BP).
+    ///
+    /// Supported ops: ==, !=, &gt;=, &lt;=, &gt;, &lt;.
+    ///
+    /// The callback Interlocked.Increments the entry's HitCount on every
+    /// firing — so HitCount is the total number of times the instruction
+    /// was hit, regardless of how many of those triggered an actual pause.
+    /// </summary>
+    private static Func<dndbg.Engine.ILCodeBreakpointConditionContext, bool>? BuildCountCondition(string? condition, BreakpointEntryRef entryRef)
+    {
+        if (string.IsNullOrWhiteSpace(condition)) return null;
+        var parsed = ParseCountCondition(condition);
+        return ctx =>
+        {
+            var entry = entryRef.Entry;
+            if (entry == null) return true;  // entry not yet linked (race) — pause as fallback
+            int n = System.Threading.Interlocked.Increment(ref entry.HitCount);
+            return parsed(n);
+        };
+    }
+
+    private static Func<int, bool> ParseCountCondition(string raw)
+    {
+        // Tokenize: "count" identifier + operator + integer. Whitespace ignored.
+        var s = raw.Trim();
+        if (!s.StartsWith("count", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"unsupported condition '{raw}': must start with 'count'. Supported: 'count <op> N' where op is ==/!=/>=/<=/>/<");
+        s = s.Substring(5).TrimStart();
+        string[] ops = new[] { ">=", "<=", "==", "!=", ">", "<" };
+        string? hitOp = null;
+        foreach (var op in ops) { if (s.StartsWith(op)) { hitOp = op; s = s.Substring(op.Length).TrimStart(); break; } }
+        if (hitOp == null)
+            throw new ArgumentException($"unsupported condition '{raw}': missing comparison operator");
+        if (!int.TryParse(s, out var n))
+            throw new ArgumentException($"unsupported condition '{raw}': right-hand side must be an integer");
+        return hitOp switch
+        {
+            ">=" => x => x >= n,
+            "<=" => x => x <= n,
+            "==" => x => x == n,
+            "!=" => x => x != n,
+            ">"  => x => x > n,
+            "<"  => x => x < n,
+            _    => throw new ArgumentException($"unsupported operator '{hitOp}'"),
+        };
+    }
 
     /// <summary>
     /// Describe which breakpoint(s) the target is currently paused on, if any.

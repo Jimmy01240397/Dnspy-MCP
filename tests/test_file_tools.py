@@ -337,6 +337,72 @@ def test_reverse_method_calls(mcp, asm):
     assert "Add" in refs and "Multiply" in refs, f"Add/Multiply missing from Compute calls: {refs}"
 
 
+def test_reverse_list_fields(mcp, asm):
+    r = mcp.call_json("reverse_list_fields",
+                      {"asmPath": asm, "typeFullName": "DnSpyMcp.TestTarget.Program"})
+    names = [row["name"] for row in r["items"]]
+    assert "TickCounter" in names and "StateLabel" in names
+    tick = next(row for row in r["items"] if row["name"] == "TickCounter")
+    assert tick["isStatic"] is True
+
+
+def test_reverse_list_properties(mcp, asm):
+    r = mcp.call_json("reverse_list_properties",
+                      {"asmPath": asm, "typeFullName": "DnSpyMcp.TestTarget.Widget"})
+    names = [row["name"] for row in r["items"]]
+    assert "Name" in names and "Value" in names
+    name_row = next(row for row in r["items"] if row["name"] == "Name")
+    assert name_row["hasGetter"] is True
+
+
+def test_reverse_list_events(mcp, asm):
+    r = mcp.call_json("reverse_list_events",
+                      {"asmPath": asm, "typeFullName": "DnSpyMcp.TestTarget.Cat"})
+    names = [row["name"] for row in r["items"]]
+    assert "Renamed" in names
+
+
+def test_reverse_list_nested_types(mcp, asm):
+    # Program has no nested types — accept empty without error.
+    r = mcp.call_json("reverse_list_nested_types",
+                      {"asmPath": asm, "typeFullName": "DnSpyMcp.TestTarget.Program"})
+    assert r["total"] >= 0
+
+
+def test_reverse_type_info(mcp, asm):
+    r = mcp.call_json("reverse_type_info",
+                      {"asmPath": asm, "typeFullName": "DnSpyMcp.TestTarget.Cat"})
+    assert r["fullName"] == "DnSpyMcp.TestTarget.Cat"
+    assert "DnSpyMcp.TestTarget.Animal" in (r.get("baseType") or "")
+    assert any("IPet" in (i or "") for i in r.get("interfaces") or [])
+    assert r["counts"]["methods"] >= 1
+
+
+def test_reverse_decompile_property(mcp, asm):
+    r = mcp.call_json("reverse_decompile_property",
+                      {"asmPath": asm,
+                       "typeFullName": "DnSpyMcp.TestTarget.Animal",
+                       "name": "Habitat"})
+    assert "Habitat" in r["text"]
+    assert "earth" in r["text"]
+
+
+def test_reverse_decompile_event(mcp, asm):
+    r = mcp.call_json("reverse_decompile_event",
+                      {"asmPath": asm,
+                       "typeFullName": "DnSpyMcp.TestTarget.Cat",
+                       "name": "Renamed"})
+    assert "Renamed" in r["text"]
+
+
+def test_reverse_decompile_field(mcp, asm):
+    r = mcp.call_json("reverse_decompile_field",
+                      {"asmPath": asm,
+                       "typeFullName": "DnSpyMcp.TestTarget.Program",
+                       "name": "StateLabel"})
+    assert "StateLabel" in r["text"]
+
+
 def test_reverse_xref_to_property(mcp, asm):
     # Cat.Describe extension method reads cat.Nickname AND cat.Habitat —
     # xref of Habitat should pick up Describe.

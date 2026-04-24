@@ -142,6 +142,115 @@ public static class AsmFileTools
         return sb.ToString();
     }
 
+    // ---- Phase 6a: type member listing -----------------------------------
+
+    [McpServerTool(Name = "reverse_list_fields")]
+    [Description("[REVERSE] List every field declared on a type. Params: typeFullName, asmPath (optional), offset=0, max=200. Rows: {name, fullName, type, attributes, token, isStatic, isReadonly}.")]
+    public static object ListFields(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 200)
+    {
+        var a = ws.Get(asmPath);
+        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var rows = t.Fields.Select(f => new
+        {
+            name = f.Name.String,
+            fullName = f.FullName,
+            type = f.FieldType?.FullName,
+            attributes = f.Attributes.ToString(),
+            token = f.MDToken.Raw,
+            isStatic = f.IsStatic,
+            isReadonly = f.IsInitOnly,
+        });
+        return Paging.Page(rows, offset, max);
+    }
+
+    [McpServerTool(Name = "reverse_list_properties")]
+    [Description("[REVERSE] List every property declared on a type. Params: typeFullName, asmPath (optional), offset=0, max=200. Rows: {name, fullName, type, hasGetter, hasSetter, attributes, token}.")]
+    public static object ListProperties(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 200)
+    {
+        var a = ws.Get(asmPath);
+        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var rows = t.Properties.Select(p => new
+        {
+            name = p.Name.String,
+            fullName = p.FullName,
+            type = p.PropertySig?.RetType?.FullName,
+            hasGetter = p.GetMethod != null,
+            hasSetter = p.SetMethod != null,
+            attributes = p.Attributes.ToString(),
+            token = p.MDToken.Raw,
+        });
+        return Paging.Page(rows, offset, max);
+    }
+
+    [McpServerTool(Name = "reverse_list_events")]
+    [Description("[REVERSE] List every event declared on a type. Params: typeFullName, asmPath (optional), offset=0, max=200. Rows: {name, fullName, type, hasAdd, hasRemove, hasInvoke, attributes, token}.")]
+    public static object ListEvents(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 200)
+    {
+        var a = ws.Get(asmPath);
+        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var rows = t.Events.Select(e => new
+        {
+            name = e.Name.String,
+            fullName = e.FullName,
+            type = e.EventType?.FullName,
+            hasAdd = e.AddMethod != null,
+            hasRemove = e.RemoveMethod != null,
+            hasInvoke = e.InvokeMethod != null,
+            attributes = e.Attributes.ToString(),
+            token = e.MDToken.Raw,
+        });
+        return Paging.Page(rows, offset, max);
+    }
+
+    [McpServerTool(Name = "reverse_list_nested_types")]
+    [Description("[REVERSE] List every nested type declared on a type. Params: typeFullName, asmPath (optional), offset=0, max=200. Rows: {name, fullName, attributes, token, isAbstract, isSealed}.")]
+    public static object ListNestedTypes(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 200)
+    {
+        var a = ws.Get(asmPath);
+        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var rows = t.NestedTypes.Select(n => new
+        {
+            name = n.Name.String,
+            fullName = n.FullName,
+            attributes = n.Attributes.ToString(),
+            token = n.MDToken.Raw,
+            isAbstract = n.IsAbstract,
+            isSealed = n.IsSealed,
+        });
+        return Paging.Page(rows, offset, max);
+    }
+
+    [McpServerTool(Name = "reverse_type_info")]
+    [Description("[REVERSE] Summarise a type: base type, implemented interfaces, member counts, generic parameters, attributes. One-shot replacement for separately calling reverse_list_fields/properties/events/methods/nested_types when you only need a quick overview. Params: typeFullName, asmPath (optional).")]
+    public static object TypeInfo(Workspace ws, string typeFullName, string? asmPath = null)
+    {
+        var a = ws.Get(asmPath);
+        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        return new
+        {
+            fullName = t.FullName,
+            @namespace = t.Namespace?.String,
+            name = t.Name?.String,
+            token = t.MDToken.Raw,
+            attributes = t.Attributes.ToString(),
+            isAbstract = t.IsAbstract,
+            isSealed = t.IsSealed,
+            isInterface = t.IsInterface,
+            isEnum = t.IsEnum,
+            baseType = t.BaseType?.FullName,
+            interfaces = t.Interfaces.Select(i => i.Interface?.FullName).Where(s => s != null).ToArray(),
+            genericParameters = t.GenericParameters.Select(g => new { name = g.Name.String, number = g.Number, attributes = g.Flags.ToString() }).ToArray(),
+            counts = new
+            {
+                fields = t.Fields.Count,
+                properties = t.Properties.Count,
+                events = t.Events.Count,
+                methods = t.Methods.Count,
+                nestedTypes = t.NestedTypes.Count,
+            },
+        };
+    }
+
     [McpServerTool(Name = "reverse_decompile_type")]
     [Description("[REVERSE] Decompile a whole type to C# (truncatable — big types blow up context). Params: typeFullName, asmPath (optional), offsetChars=0, maxChars=64000. Response: {totalChars, offsetChars, returnedChars, truncated, text}.")]
     public static object DecompileType(Workspace ws, string typeFullName, string? asmPath = null, int offsetChars = 0, int maxChars = 32_000)
@@ -160,6 +269,42 @@ public static class AsmFileTools
         var a = ws.Get(asmPath);
         var m = ResolveOverload(a.Module, typeFullName, methodName, signature, overloadIndex);
         var handle = MetadataTokens.MethodDefinitionHandle((int)m.MDToken.Rid);
+        var full = a.Decompiler.DecompileAsString(handle);
+        return Paging.ClampText(full, offsetChars, maxChars);
+    }
+
+    [McpServerTool(Name = "reverse_decompile_property")]
+    [Description("[REVERSE] Decompile a property to C# (truncatable). Returns the get/set accessor pair with attributes and modifiers. Params: typeFullName, name, asmPath (optional), offsetChars=0, maxChars=64000.")]
+    public static object DecompileProperty(Workspace ws, string typeFullName, string name, string? asmPath = null, int offsetChars = 0, int maxChars = 64_000)
+    {
+        var a = ws.Get(asmPath);
+        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var p = t.Properties.FirstOrDefault(x => x.Name == name) ?? throw new McpException($"property not found: {typeFullName}::{name}");
+        var handle = MetadataTokens.PropertyDefinitionHandle((int)p.MDToken.Rid);
+        var full = a.Decompiler.DecompileAsString(handle);
+        return Paging.ClampText(full, offsetChars, maxChars);
+    }
+
+    [McpServerTool(Name = "reverse_decompile_event")]
+    [Description("[REVERSE] Decompile an event to C# (truncatable). Returns the add/remove accessor pair with attributes. Params: typeFullName, name, asmPath (optional), offsetChars=0, maxChars=64000.")]
+    public static object DecompileEvent(Workspace ws, string typeFullName, string name, string? asmPath = null, int offsetChars = 0, int maxChars = 64_000)
+    {
+        var a = ws.Get(asmPath);
+        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var e = t.Events.FirstOrDefault(x => x.Name == name) ?? throw new McpException($"event not found: {typeFullName}::{name}");
+        var handle = MetadataTokens.EventDefinitionHandle((int)e.MDToken.Rid);
+        var full = a.Decompiler.DecompileAsString(handle);
+        return Paging.ClampText(full, offsetChars, maxChars);
+    }
+
+    [McpServerTool(Name = "reverse_decompile_field")]
+    [Description("[REVERSE] Decompile a field to C# (truncatable). Returns the field declaration plus initializer (for const / readonly static / explicit-layout) when present. Params: typeFullName, name, asmPath (optional), offsetChars=0, maxChars=32000.")]
+    public static object DecompileField(Workspace ws, string typeFullName, string name, string? asmPath = null, int offsetChars = 0, int maxChars = 32_000)
+    {
+        var a = ws.Get(asmPath);
+        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var f = t.Fields.FirstOrDefault(x => x.Name == name) ?? throw new McpException($"field not found: {typeFullName}::{name}");
+        var handle = MetadataTokens.FieldDefinitionHandle((int)f.MDToken.Rid);
         var full = a.Decompiler.DecompileAsString(handle);
         return Paging.ClampText(full, offsetChars, maxChars);
     }

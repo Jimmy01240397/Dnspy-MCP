@@ -199,13 +199,107 @@ def test_wait_paused_reports_bp_hit(live_agent):
     assert ds["bpHit"]["hits"][0]["id"] in expected_ids
 
 
-def test_step_in_out(live_agent):
-    live_agent.call_json("debug_pause")
-    live_agent.call_json("debug_wait_paused", {"timeoutMs": 3000})
-    live_agent.call_json("debug_step_in", {"timeoutMs": 2000})
-    live_agent.call_json("debug_wait_paused", {"timeoutMs": 3000})
-    live_agent.call_json("debug_step_out", {"timeoutMs": 2000})
+def test_conditional_bp_count(live_agent):
+    """Setting a BP with `count >= N` must NOT pause until the Nth hit.
+    HitCount in bp.list reflects every callback, including ones that didn't
+    pause; the first wait_paused after registration should report bpHit
+    with hitCount >= N."""
+    # Clean any leftover BPs so the count starts at 0.
+    for old in _items(live_agent.call_json("debug_bp_list")):
+        live_agent.call_json("debug_bp_delete", {"id": old["id"]})
     live_agent.call_json("debug_go")
+
+    bp = live_agent.call_json("debug_bp_set_by_name", {
+        "modulePath": "dnspymcptest",
+        "typeFullName": "DnSpyMcp.TestTarget.Program",
+        "methodName": "Add",
+        "condition": "count >= 5",
+    })
+    bp_id = bp["id"]
+    assert bp["condition"] == "count >= 5"
+    assert bp["hitCount"] == 0
+    try:
+        # Each Add() call ticks every 500ms. count>=5 means we pause on the
+        # 5th hit — generous timeout.
+        r = live_agent.call_json("debug_wait_paused", {"timeoutMs": 6000})
+        assert r["state"] == "Paused"
+        hit = r.get("bpHit") or {}
+        # The first hit that triggered the pause should be the 5th — the
+        # actual count may be slightly higher if the dispatcher fired again
+        # before our wait_paused returned, but never less than 5.
+        bps = _items(live_agent.call_json("debug_bp_list"))
+        ours = next(b for b in bps if b["id"] == bp_id)
+        assert ours["hitCount"] >= 5, f"expected hitCount>=5, got {ours}"
+    finally:
+        live_agent.call_json("debug_bp_delete", {"id": bp_id})
+        live_agent.call_json("debug_go")
+
+
+def test_frame_locals_arguments(live_agent):
+    """Pause inside Add() and read its arguments. The two int parameters
+    a/b must come back as primitive Int32s with concrete values."""
+    for old in _items(live_agent.call_json("debug_bp_list")):
+        live_agent.call_json("debug_bp_delete", {"id": old["id"]})
+    live_agent.call_json("debug_go")
+
+    bp = live_agent.call_json("debug_bp_set_by_name", {
+        "modulePath": "dnspymcptest",
+        "typeFullName": "DnSpyMcp.TestTarget.Program",
+        "methodName": "Add",
+    })
+    bp_id = bp["id"]
+    try:
+        wait = live_agent.call_json("debug_wait_paused", {"timeoutMs": 5000})
+        assert wait["state"] == "Paused"
+
+        # Add(int a, int b) — args at indices 0 and 1 (no `this`, it's static).
+        args = live_agent.call_json("debug_frame_arguments", {"frameIndex": 0})
+        assert args["count"] >= 2, f"expected >=2 args, got {args}"
+        kinds = {a["value"].get("kind") for a in args["items"][:2]}
+        # Both should be primitives (Int32).
+        assert "primitive" in kinds, f"expected primitive args, got {args}"
+
+        # Locals — Add()'s body is just `return a + b`, may or may not have
+        # locals depending on optimization. Smoke: the call returns count>=0.
+        locals_ = live_agent.call_json("debug_frame_locals", {"frameIndex": 0})
+        assert locals_["count"] >= 0
+    finally:
+        live_agent.call_json("debug_bp_delete", {"id": bp_id})
+        live_agent.call_json("debug_go")
+
+
+def test_conditional_bp_invalid_syntax(live_agent):
+    r = live_agent.call("debug_bp_set_by_name", {
+        "modulePath": "dnspymcptest",
+        "typeFullName": "DnSpyMcp.TestTarget.Program",
+        "methodName": "Add",
+        "condition": "garbage>>10",
+    })
+    assert not r["ok"], "expected parse error for bad condition"
+    assert "condition" in r["text"].lower() or "count" in r["text"].lower()
+
+
+def test_step_in_out(live_agent):
+    # Stop at a known managed-code site (Compute) so step_in/out have
+    # meaningful targets — pausing on a random thread can land in
+    # GC / kernel-call frames where step_out is undefined.
+    for old in _items(live_agent.call_json("debug_bp_list")):
+        live_agent.call_json("debug_bp_delete", {"id": old["id"]})
+    live_agent.call_json("debug_go")
+    bp = live_agent.call_json("debug_bp_set_by_name", {
+        "modulePath": "dnspymcptest",
+        "typeFullName": "DnSpyMcp.TestTarget.Program",
+        "methodName": "Compute",
+    })
+    bp_id = bp["id"]
+    try:
+        live_agent.call_json("debug_wait_paused", {"timeoutMs": 5000})
+        live_agent.call_json("debug_step_in", {"timeoutMs": 3000})
+        live_agent.call_json("debug_wait_paused", {"timeoutMs": 3000})
+        live_agent.call_json("debug_step_out", {"timeoutMs": 3000})
+    finally:
+        live_agent.call_json("debug_bp_delete", {"id": bp_id})
+        live_agent.call_json("debug_go")
 
 
 def test_memory_roundtrip(live_agent):

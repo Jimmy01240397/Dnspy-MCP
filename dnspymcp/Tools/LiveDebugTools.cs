@@ -171,6 +171,16 @@ public static class LiveDebugTools
         return Paging.PageJsonArray(reg.Get(agent).Result("thread.stack", payload), offset, max);
     }
 
+    [McpServerTool(Name = "debug_frame_locals")]
+    [Description("[DEBUG] Read managed local variables of the currently-paused frame. Primitives are decoded; references return type+address. Pass frameIndex to pick a deeper frame on the pause-thread (default 0 = top). Params: frameIndex=0.")]
+    public static object FrameLocals(AgentRegistry reg, int frameIndex = 0, string? agent = null)
+        => reg.Get(agent).Result("frame.locals", new { frameIndex })!;
+
+    [McpServerTool(Name = "debug_frame_arguments")]
+    [Description("[DEBUG] Read managed arguments (this + parameters) of the currently-paused frame. Same shape as debug_frame_locals. Params: frameIndex=0.")]
+    public static object FrameArguments(AgentRegistry reg, int frameIndex = 0, string? agent = null)
+        => reg.Get(agent).Result("frame.arguments", new { frameIndex })!;
+
     [McpServerTool(Name = "debug_thread_current")]
     [Description("[DEBUG] Return which thread triggered the last pause.")]
     public static object CurrentThread(AgentRegistry reg, string? agent = null)
@@ -196,14 +206,14 @@ public static class LiveDebugTools
     // ---- breakpoints ----------------------------------------------------
 
     [McpServerTool(Name = "debug_bp_set_il")]
-    [Description("[DEBUG] Set an IL-offset breakpoint. Params: modulePath (suffix ok), token:uint, offset:uint=0.")]
-    public static object BpSetIl(AgentRegistry reg, string modulePath, uint token, uint offset = 0, string? agent = null)
-        => reg.Get(agent).Result("bp.set_il", new { modulePath, token, offset })!;
+    [Description("[DEBUG] Set an IL-offset breakpoint. Params: modulePath (suffix ok), token:uint, offset:uint=0, condition (optional, format `count <op> N` where op is ==/!=/>=/<=/>/<; e.g. 'count >= 5' to skip the first 4 hits).")]
+    public static object BpSetIl(AgentRegistry reg, string modulePath, uint token, uint offset = 0, string? condition = null, string? agent = null)
+        => reg.Get(agent).Result("bp.set_il", new { modulePath, token, offset, condition })!;
 
     [McpServerTool(Name = "debug_bp_set_by_name")]
-    [Description("[DEBUG] Set a breakpoint at IL=0 of a named method. Params: modulePath, typeFullName, methodName, overloadIndex=0.")]
-    public static object BpSetByName(AgentRegistry reg, string modulePath, string typeFullName, string methodName, int overloadIndex = 0, string? agent = null)
-        => reg.Get(agent).Result("bp.set_by_name", new { modulePath, typeFullName, methodName, overloadIndex })!;
+    [Description("[DEBUG] Set a breakpoint at IL=0 of a named method. Params: modulePath, typeFullName, methodName, overloadIndex=0, condition (optional, format `count <op> N`).")]
+    public static object BpSetByName(AgentRegistry reg, string modulePath, string typeFullName, string methodName, int overloadIndex = 0, string? condition = null, string? agent = null)
+        => reg.Get(agent).Result("bp.set_by_name", new { modulePath, typeFullName, methodName, overloadIndex, condition })!;
 
     [McpServerTool(Name = "debug_bp_list")]
     [Description("[DEBUG] List all breakpoints currently registered on the agent (paginated). Params: offset=0, max=200.")]
