@@ -71,7 +71,7 @@ public static class SessionHandlers
             "[DEBUG] Detach from the current target. Agent keeps listening. Idempotent — detach without attach is a no-op.",
             _ =>
             {
-                bool wasAttached = Program.Session.IsAttached || Program.Session.IsDump;
+                bool wasAttached = Program.Session.IsAttached;
                 Program.Session.Detach();
                 return new
                 {
@@ -83,7 +83,7 @@ public static class SessionHandlers
             });
 
         d.Register("session.info",
-            "[DEBUG] Describe the current debug session (attached pid / loaded dump / last exit info if any). When paused on a breakpoint, `bpHit` carries the matching registry id, kind, description, token, ilOffset and the thread that hit it.",
+            "[DEBUG] Describe the current debug session (attached pid + last exit info if any). When paused on a breakpoint, `bpHit` carries the matching registry id, kind, description, token, ilOffset and the thread that hit it.",
             _ =>
             {
                 object? bpHit = null;
@@ -91,9 +91,7 @@ public static class SessionHandlers
                 return new
                 {
                     isAttached = Program.Session.IsAttached,
-                    isDump = Program.Session.IsDump,
                     pid = Program.Session.Pid,
-                    dumpPath = Program.Session.DumpPath,
                     description = Program.Session.Describe(),
                     lastExitedPid = Program.Session.LastExitedPid,
                     lastExitReason = Program.Session.LastExitReason,

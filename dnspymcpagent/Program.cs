@@ -31,17 +31,8 @@ internal static class Program
         HeapHandlers.Register(Dispatcher);
         MemoryHandlers.Register(Dispatcher);
 
-        // Live attach is now driven from MCP via debug_pid_attach (a runtime
-        // RPC), so the agent starts in "no target" mode and waits for a
-        // session.attach call. Crash dumps stay a CLI option because they
-        // describe an entirely different mode (no live process), are usually
-        // immutable, and aren't useful to swap mid-session.
-        if (cli.DumpPath is string dump)
-        {
-            Console.WriteLine($"  load dump: {dump}");
-            try { Session.LoadDump(dump); }
-            catch (Exception ex) { Console.Error.WriteLine($"  load dump failed: {ex.Message}"); return 2; }
-        }
+        // The agent boots in "no target" mode and waits for an MCP-driven
+        // debug_pid_attach (session.attach RPC) to bind to a PID.
 
         var server = new TcpJsonServer(Dispatcher, cli.Host, cli.Port, cli.Token);
         server.Start();
@@ -65,7 +56,6 @@ internal sealed class CliOptions
 {
     public string Host { get; set; } = "127.0.0.1";
     public int Port { get; set; } = 5555;
-    public string? DumpPath { get; set; }
     public string? Token { get; set; }
 
     public static CliOptions? Parse(string[] args)
@@ -84,9 +74,6 @@ internal sealed class CliOptions
                 case "-p":
                 case "--port":
                     o.Port = int.Parse(Next() ?? throw new ArgumentException("missing value for --port"));
-                    break;
-                case "--dump":
-                    o.DumpPath = Next() ?? throw new ArgumentException("missing value for --dump");
                     break;
                 case "--token":
                     o.Token = Next();
@@ -110,13 +97,13 @@ internal sealed class CliOptions
             dnspymcpagent [options]
               -h, --host HOST      bind host (default 127.0.0.1; use 0.0.0.0 for any)
               -p, --port PORT      bind tcp port (default 5555)
-                  --dump PATH      load a crash dump (alternative to live attach)
                   --token TOKEN    require an `auth` frame with this token as first message
                   --help           this help
 
-            For LIVE process attach use the MCP tool `debug_pid_attach`
+            Live process attach is driven from the MCP tool `debug_pid_attach`
             (or RPC method `session.attach` over TCP) after the agent is up —
-            the agent boots in 'no target' mode by default.
+            the agent boots in 'no target' mode by default. Dump-file analysis
+            is not supported; use IDA / WinDbg MCPs for offline dumps.
 
             Protocol: persistent TCP + newline-delimited JSON.
               Client sends:   {"id":N,"method":"...","params":{...}}

@@ -34,8 +34,8 @@ Every MCP tool is tagged either `[REVERSE]` or `[DEBUG]`:
 
 * **`[REVERSE]`** — operates on a .dll/.exe on disk. Doesn't need the agent.
   Prefixed with `asm_file_*`, `decompile_*`, `il_*`, `file_patch_*`.
-* **`[DEBUG]`** — operates on a running / dumped process through the agent.
-  Prefixed with `live_*`.
+* **`[DEBUG]`** — operates on a live .NET process through the agent.
+  Prefixed with `debug_*`.
 
 The first line of every tool description states the target context so the
 LLM never confuses "I'm inspecting a file on disk" with "I'm poking at a
@@ -79,10 +79,13 @@ live_memory_read / live_memory_write / live_memory_read_int / live_disasm
 ### Target side (the host whose .NET process you want to debug)
 
 ```
-dnspymcpagent.exe --host 0.0.0.0 --port 5555 --attach 1234
+dnspymcpagent.exe --host 0.0.0.0 --port 5555
 # optional: --token SECRET   (client must `auth` first)
-# optional: --dump path\to\crash.dmp   (offline analysis, no ICorDebug)
 ```
+
+The agent boots in 'no target' mode and binds to a PID via the MCP tool
+`debug_pid_attach` (RPC `session.attach`). For offline crash-dump analysis
+use IDA / WinDbg MCPs — dnspymcp is live-attach only.
 
 Protocol: one NDJSON request per line, one NDJSON response per line.
 
@@ -138,8 +141,7 @@ tracked as a git submodule under `dnspy/`, but `lib/` is **not** committed
 
 `dnspymcp` keeps a named registry of agent sessions so one MCP server can
 drive several target hosts at once. An "agent session" is a persistent
-TCP link to one `dnspymcpagent` process (which itself is pinned to one
-target PID or dump at startup). The registry is idalib-style: open once,
+TCP link to one `dnspymcpagent` process. The registry is idalib-style: open once,
 switch for free — TCP auto-reconnects if the agent restarts, so you never
 need to disconnect between tool calls.
 
