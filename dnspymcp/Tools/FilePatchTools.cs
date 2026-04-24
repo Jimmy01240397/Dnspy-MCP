@@ -16,7 +16,7 @@ namespace DnSpyMcp.Tools;
 public static class FilePatchTools
 {
     [McpServerTool(Name = "reverse_patch_il_nop")]
-    [Description("[FILE] Replace a range of IL instructions with nops and save to outputPath. Params: typeFullName, methodName, startOffset, endOffset (inclusive), outputPath, asmPath (optional), overloadIndex=0.")]
+    [Description("[REVERSE] Replace a range of IL instructions with nops and save to outputPath. Params: typeFullName, methodName, startOffset, endOffset (inclusive), outputPath, asmPath (optional), overloadIndex=0.")]
     public static object PatchIlNop(Workspace ws, string typeFullName, string methodName,
                                     int startOffset, int endOffset, string outputPath, string? asmPath = null, int overloadIndex = 0)
     {
@@ -42,7 +42,7 @@ public static class FilePatchTools
     }
 
     [McpServerTool(Name = "reverse_patch_bytes")]
-    [Description("[FILE] Overwrite raw file bytes at a given file offset. Params: filePath (any binary), offset:long, hex:string. Returns {written}.")]
+    [Description("[REVERSE] Overwrite raw file bytes at a given file offset. Params: filePath (any binary), offset:long, hex:string. Returns {written}.")]
     public static object PatchBytes(string filePath, long offset, string hex)
     {
         hex = hex.Replace(" ", "").Replace("\n", "").Replace("\r", "");
@@ -57,7 +57,7 @@ public static class FilePatchTools
     }
 
     [McpServerTool(Name = "reverse_save_assembly")]
-    [Description("[FILE] Write the in-memory ModuleDef (with your patches) back to a new path. Params: outputPath, asmPath (optional).")]
+    [Description("[REVERSE] Write the in-memory ModuleDef (with your patches) back to a new path. Params: outputPath, asmPath (optional).")]
     public static object SaveAssembly(Workspace ws, string outputPath, string? asmPath = null)
     {
         var a = ws.Get(asmPath);

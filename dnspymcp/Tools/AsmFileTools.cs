@@ -15,7 +15,7 @@ namespace DnSpyMcp.Tools;
 public static class AsmFileTools
 {
     [McpServerTool(Name = "reverse_open")]
-    [Description("[FILE] Open a .NET assembly from disk for static analysis (decompile / IL / xref / find). Becomes the active session (subsequent FILE tools may omit asmPath). Path is absolute.")]
+    [Description("[REVERSE] Open a .NET assembly from disk for static analysis (decompile / IL / xref / find). Becomes the active session (subsequent FILE tools may omit asmPath). Path is absolute.")]
     public static object AsmOpen(Workspace ws, string asmPath)
     {
         var a = ws.Open(asmPath);
@@ -30,12 +30,12 @@ public static class AsmFileTools
     }
 
     [McpServerTool(Name = "reverse_close")]
-    [Description("[FILE] Close a previously opened assembly and free its metadata.")]
+    [Description("[REVERSE] Close a previously opened assembly and free its metadata.")]
     public static object AsmClose(Workspace ws, string asmPath)
         => new { closed = ws.Close(asmPath), current = ws.Current };
 
     [McpServerTool(Name = "reverse_list")]
-    [Description("[FILE] List every assembly currently opened in the workspace (multi-session). Marks the active one.")]
+    [Description("[REVERSE] List every assembly currently opened in the workspace (multi-session). Marks the active one.")]
     public static object AsmList(Workspace ws)
         => ws.All.Select(a => new {
             path = a.Path,
@@ -45,11 +45,11 @@ public static class AsmFileTools
         }).ToArray();
 
     [McpServerTool(Name = "reverse_current")]
-    [Description("[FILE] Return the currently-active asm_file path (used by other FILE tools when asmPath is omitted).")]
+    [Description("[REVERSE] Return the currently-active asm_file path (used by other FILE tools when asmPath is omitted).")]
     public static object AsmCurrent(Workspace ws) => new { current = ws.Current };
 
     [McpServerTool(Name = "reverse_switch")]
-    [Description("[FILE] Switch the active asm_file session. Subsequent FILE tools can omit asmPath and act on this one.")]
+    [Description("[REVERSE] Switch the active asm_file session. Subsequent FILE tools can omit asmPath and act on this one.")]
     public static object AsmSwitch(Workspace ws, string asmPath)
     {
         var a = ws.Switch(asmPath);
@@ -57,7 +57,7 @@ public static class AsmFileTools
     }
 
     [McpServerTool(Name = "reverse_list_types")]
-    [Description("[FILE] List types in an opened assembly (paginated). Filters: namePattern (case-insensitive substring on FullName), namespacePattern (exact namespace, or 'Foo.Bar' matches nested 'Foo.Bar.*'). Params: asmPath (optional), namePattern (optional), namespacePattern (optional), offset=0, max=100. Response: {total, offset, returned, truncated, items}.")]
+    [Description("[REVERSE] List types in an opened assembly (paginated). Filters: namePattern (case-insensitive substring on FullName), namespacePattern (exact namespace, or 'Foo.Bar' matches nested 'Foo.Bar.*'). Params: asmPath (optional), namePattern (optional), namespacePattern (optional), offset=0, max=100. Response: {total, offset, returned, truncated, items}.")]
     public static object ListTypes(Workspace ws, string? asmPath = null, string? namePattern = null, string? namespacePattern = null, int offset = 0, int max = 100)
     {
         var a = ws.Get(asmPath);
@@ -75,7 +75,7 @@ public static class AsmFileTools
     }
 
     [McpServerTool(Name = "reverse_list_methods")]
-    [Description("[FILE] List methods of a type (paginated). Params: typeFullName, asmPath (optional), offset=0, max=200.")]
+    [Description("[REVERSE] List methods of a type (paginated). Params: typeFullName, asmPath (optional), offset=0, max=200.")]
     public static object ListMethods(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 100)
     {
         var a = ws.Get(asmPath);
@@ -91,7 +91,7 @@ public static class AsmFileTools
     }
 
     [McpServerTool(Name = "reverse_decompile_type")]
-    [Description("[FILE] Decompile a whole type to C# (truncatable — big types blow up context). Params: typeFullName, asmPath (optional), offsetChars=0, maxChars=64000. Response: {totalChars, offsetChars, returnedChars, truncated, text}.")]
+    [Description("[REVERSE] Decompile a whole type to C# (truncatable — big types blow up context). Params: typeFullName, asmPath (optional), offsetChars=0, maxChars=64000. Response: {totalChars, offsetChars, returnedChars, truncated, text}.")]
     public static object DecompileType(Workspace ws, string typeFullName, string? asmPath = null, int offsetChars = 0, int maxChars = 32_000)
     {
         var a = ws.Get(asmPath);
@@ -100,7 +100,7 @@ public static class AsmFileTools
     }
 
     [McpServerTool(Name = "reverse_decompile_method")]
-    [Description("[FILE] Decompile a single method to C# (truncatable). Params: typeFullName, methodName, asmPath (optional), overloadIndex=0, offsetChars=0, maxChars=64000.")]
+    [Description("[REVERSE] Decompile a single method to C# (truncatable). Params: typeFullName, methodName, asmPath (optional), overloadIndex=0, offsetChars=0, maxChars=64000.")]
     public static object DecompileMethod(Workspace ws, string typeFullName, string methodName,
                                          string? asmPath = null, int overloadIndex = 0,
                                          int offsetChars = 0, int maxChars = 64_000)
@@ -117,7 +117,7 @@ public static class AsmFileTools
     }
 
     [McpServerTool(Name = "reverse_il_method")]
-    [Description("[FILE] Return raw IL for a method (paginated by instruction). Params: typeFullName, methodName, asmPath (optional), overloadIndex=0, offset=0, max=500.")]
+    [Description("[REVERSE] Return raw IL for a method (paginated by instruction). Params: typeFullName, methodName, asmPath (optional), overloadIndex=0, offset=0, max=500.")]
     public static object IlMethod(Workspace ws, string typeFullName, string methodName,
                                   string? asmPath = null, int overloadIndex = 0,
                                   int offset = 0, int max = 200)
@@ -134,7 +134,7 @@ public static class AsmFileTools
     }
 
     [McpServerTool(Name = "reverse_il_method_by_token")]
-    [Description("[FILE] Return IL for a method identified by its metadata token (paginated). Params: token, asmPath (optional), offset=0, max=500.")]
+    [Description("[REVERSE] Return IL for a method identified by its metadata token (paginated). Params: token, asmPath (optional), offset=0, max=500.")]
     public static object IlByToken(Workspace ws, uint token, string? asmPath = null, int offset = 0, int max = 200)
     {
         var a = ws.Get(asmPath);
@@ -146,81 +146,39 @@ public static class AsmFileTools
     }
 
     [McpServerTool(Name = "reverse_find_string")]
-    [Description("[FILE] Find methods whose IL loads a string literal (ldstr) matching the pattern. Default: case-sensitive substring. Use regex=true to switch to .NET regex (ECMAScript flavor). Always returns the full matched literal in 'value'. Paginated. Params: needle (required), regex=false, asmPath (optional), offset=0, max=100.")]
+    [Description("[REVERSE] Find methods whose IL loads a string literal (ldstr) matching the pattern. Default scope: EVERY currently-opened assembly (cross-DLL). Pass asmPath to limit to a single one. Matching is case-sensitive substring by default; pass regex=true for .NET regex. Always returns the full matched literal in 'value' plus the assembly it lives in. Paginated. Params: needle (required), regex=false, asmPath (optional, defaults to all-opened), offset=0, max=100.")]
     public static object FindString(Workspace ws, string needle, bool regex = false, string? asmPath = null, int offset = 0, int max = 100)
     {
         if (string.IsNullOrEmpty(needle)) throw new McpException("needle must be non-empty");
-        var a = ws.Get(asmPath);
-        Regex? rx = null;
+        // asmPath semantics: null / empty = cross-DLL (all opened); otherwise
+        // limited to that one. We validate the limit path exists so a typo
+        // doesn't silently fall through to "found nothing".
+        string? scope = null;
+        if (!string.IsNullOrEmpty(asmPath))
+            scope = ws.Get(asmPath).Path;
+        // Compile regex here so the caller gets a descriptive error rather
+        // than an opaque RegexParseException from the enumerator.
         if (regex)
         {
-            try { rx = new Regex(needle, RegexOptions.Compiled | RegexOptions.CultureInvariant); }
+            try { _ = new Regex(needle, RegexOptions.Compiled); }
             catch (ArgumentException ex) { throw new McpException($"invalid regex '{needle}': {ex.Message}"); }
         }
-        var rows = new List<object>();
-        foreach (var t in a.Module.GetTypes())
-        {
-            foreach (var m in t.Methods)
-            {
-                if (!m.HasBody) continue;
-                foreach (var i in m.Body.Instructions)
-                {
-                    if (i.OpCode.Code != dnlib.DotNet.Emit.Code.Ldstr || i.Operand is not string s) continue;
-                    bool hit = rx != null
-                        ? rx.IsMatch(s)
-                        : s.Contains(needle, StringComparison.Ordinal);
-                    if (hit)
-                        rows.Add(new { type = t.FullName, method = m.Name.String, fullName = m.FullName, ilOffset = i.Offset, value = s });
-                }
-            }
-        }
+        var rows = ws.Index.FindString(needle, regex, scope)
+            .Select(h => new { asm = h.AsmPath, type = h.TypeFullName, method = h.MethodName, fullName = h.MethodFullName, ilOffset = h.IlOffset, value = h.Value });
         return Paging.Page(rows, offset, max);
     }
 
     [McpServerTool(Name = "reverse_xref_to_method")]
-    [Description("[FILE] Find all methods that call the given method (paginated). targetFullName accepts full signature ('System.Int32 Ns.Type::Method(System.Int32)') or shorthand 'Ns.Type.Method'. Params: targetFullName, asmPath (optional), offset=0, max=500.")]
+    [Description("[REVERSE] Find all methods that call the given method. Default scope: EVERY currently-opened assembly (cross-DLL). Pass asmPath to limit. targetFullName accepts full signature ('System.Int32 Ns.Type::Method(System.Int32)') OR shorthand 'Ns.Type.Method' (matches any overload). Response rows include the assembly each caller lives in. Paginated. Params: targetFullName, asmPath (optional, defaults to all-opened), offset=0, max=200.")]
     public static object XrefToMethod(Workspace ws, string targetFullName, string? asmPath = null, int offset = 0, int max = 200)
     {
-        var a = ws.Get(asmPath);
-        bool isSignature = targetFullName.Contains("::");
-        string? shortDecl = null;
-        string? shortName = null;
-        if (!isSignature)
-        {
-            int dot = targetFullName.LastIndexOf('.');
-            if (dot > 0)
-            {
-                shortDecl = targetFullName.Substring(0, dot);
-                shortName = targetFullName.Substring(dot + 1);
-            }
-            else
-            {
-                shortName = targetFullName;
-            }
-        }
-
-        var rows = new List<object>();
-        foreach (var t in a.Module.GetTypes())
-        {
-            foreach (var m in t.Methods)
-            {
-                if (!m.HasBody) continue;
-                foreach (var i in m.Body.Instructions)
-                {
-                    var op = i.OpCode.Code;
-                    if (op != dnlib.DotNet.Emit.Code.Call && op != dnlib.DotNet.Emit.Code.Callvirt && op != dnlib.DotNet.Emit.Code.Newobj) continue;
-                    if (i.Operand is not dnlib.DotNet.IMethod target) continue;
-
-                    bool hit = isSignature
-                        ? target.FullName == targetFullName
-                        : (target.Name.String == shortName &&
-                           (shortDecl == null || target.DeclaringType?.FullName == shortDecl));
-
-                    if (hit)
-                        rows.Add(new { from = m.FullName, ilOffset = i.Offset, opCode = i.OpCode.Name, target = target.FullName });
-                }
-            }
-        }
+        if (string.IsNullOrEmpty(targetFullName))
+            throw new McpException("targetFullName must be non-empty");
+        string? scope = null;
+        if (!string.IsNullOrEmpty(asmPath))
+            scope = ws.Get(asmPath).Path;
+        var rows = ws.Index.XrefToMethod(targetFullName, scope)
+            .Select(s => new { asm = s.AsmPath, from = s.FromMethodFullName, ilOffset = s.IlOffset, opCode = s.OpCode, target = s.TargetFullName });
         return Paging.Page(rows, offset, max);
     }
 }

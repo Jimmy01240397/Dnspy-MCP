@@ -27,6 +27,10 @@ public sealed class Workspace : IDisposable
 
     private readonly ConcurrentDictionary<string, OpenedAsm> _open = new(System.StringComparer.OrdinalIgnoreCase);
     private string? _current;
+    // Cross-DLL search index. Populated incrementally by Open, pruned by Close.
+    // Tools that support cross-DLL search (find_string, xref_to_method, ...)
+    // query this instead of walking Module.GetTypes() per call.
+    internal readonly CrossDllIndex Index = new();
     public DecompilerSettings Settings { get; } = new(LanguageVersion.CSharp11_0)
     {
         UsingDeclarations = true,
@@ -37,19 +41,34 @@ public sealed class Workspace : IDisposable
     public OpenedAsm Open(string path)
     {
         path = System.IO.Path.GetFullPath(path);
-        var asm = _open.GetOrAdd(path, p =>
+        // Refuse to open the same asm twice. Silently returning the existing
+        // instance let callers accumulate invisible duplicates in their
+        // session list; an explicit error makes the state mismatch visible
+        // so they can either switch to the existing slot or close it first.
+        if (_open.TryGetValue(path, out var existing))
+            throw new McpException($"asm_file already opened: {path}. Call reverse_switch to make it active, or reverse_close to free it first.");
+        var pe = new PEFile(path);
+        var module = ModuleDefMD.Load(path);
+        var resolver = new UniversalAssemblyResolver(path, true, pe.Metadata.DetectTargetFrameworkId());
+        // Share the PEFile with the decompiler so Close() only needs to
+        // dispose one mapping. Passing the path would make the decompiler
+        // open its own PEFile and leak the file handle.
+        var decomp = new CSharpDecompiler(pe, resolver, Settings);
+        var opened = new OpenedAsm(path, module, decomp, pe);
+        if (!_open.TryAdd(path, opened))
         {
-            var pe = new PEFile(p);
-            var module = ModuleDefMD.Load(p);
-            var resolver = new UniversalAssemblyResolver(p, true, pe.Metadata.DetectTargetFrameworkId());
-            // Share the PEFile with the decompiler so Close() only needs to
-            // dispose one mapping. Passing the path would make the decompiler
-            // open its own PEFile and leak the file handle.
-            var decomp = new CSharpDecompiler(pe, resolver, Settings);
-            return new OpenedAsm(p, module, decomp, pe);
-        });
-        _current = asm.Path;
-        return asm;
+            // Lost a race against a concurrent Open of the same path; clean up
+            // our half-built PEFile/module and tell the caller which asm won.
+            try { module.Dispose(); } catch { }
+            try { pe.Dispose(); } catch { }
+            throw new McpException($"asm_file already opened: {path} (concurrent open race). Call reverse_switch to make it active.");
+        }
+        // Eagerly index on open. This moves the cost of future cross-DLL
+        // find_string / xref_to_method queries from per-query back to
+        // per-open — matters when the caller opens ~1000 GAC DLLs.
+        Index.Add(path, module);
+        _current = path;
+        return opened;
     }
 
     public bool Close(string path)
@@ -57,6 +76,7 @@ public sealed class Workspace : IDisposable
         path = System.IO.Path.GetFullPath(path);
         if (_open.TryRemove(path, out var a))
         {
+            Index.Remove(path);
             // Release every resource that might still map the file on disk,
             // otherwise the file stays locked after close.
             try { a.Module.Dispose(); } catch { }
