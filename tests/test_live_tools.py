@@ -472,6 +472,45 @@ def test_attach_with_initial_breakpoints(live_agent, testtarget_pid):
     live_agent.call_json("debug_go")
 
 
+def test_attach_with_initial_breakpoint_condition(live_agent, testtarget_pid):
+    """`condition` in an initialBreakpointsJson spec must be applied — earlier
+    revisions silently dropped it because the SetByName/SetIl helpers in
+    BreakpointHandlers passed `null` to CreateBreakpoint regardless of the
+    spec's condition field. Regression: bp.list must surface the condition,
+    and hitCount must increment as the predicate fires."""
+    import json as _json
+    live_agent.call_json("debug_pid_detach")
+    spec = [
+        {"kind": "by_name", "modulePath": "dnspymcptest",
+         "typeFullName": "DnSpyMcp.TestTarget.Program", "methodName": "Multiply",
+         "condition": "count >= 3"},
+    ]
+    r = live_agent.call_json("debug_pid_attach", {
+        "pid": testtarget_pid,
+        "initialBreakpointsJson": _json.dumps(spec),
+    })
+    assert r["initialBreakpoints"][0]["ok"] is True
+    bp_id = r["initialBreakpoints"][0]["bp"]["id"]
+    # The attach response should carry the condition string — proves
+    # entry.Condition was wired through.
+    assert r["initialBreakpoints"][0]["bp"].get("condition") == "count >= 3"
+
+    try:
+        # Wait for the BP to actually pause us; that requires count >= 3.
+        wait = live_agent.call_json("debug_wait_paused", {"timeoutMs": 6000})
+        assert wait["state"] == "Paused"
+        # bp.list must reflect the condition AND a non-zero hitCount.
+        bps = _items(live_agent.call_json("debug_bp_list"))
+        ours = next(b for b in bps if b["id"] == bp_id)
+        assert ours.get("condition") == "count >= 3", \
+            f"condition lost on initialBreakpoints path: {ours}"
+        assert ours.get("hitCount", 0) >= 3, \
+            f"hitCount should be >= 3, got {ours.get('hitCount')}"
+    finally:
+        live_agent.call_json("debug_bp_delete", {"id": bp_id})
+        live_agent.call_json("debug_go")
+
+
 def test_attach_same_pid_is_idempotent(live_agent, testtarget_pid):
     """Calling attach with the already-attached pid should succeed (internally
     detaches + re-attaches, but from caller's view it just works)."""

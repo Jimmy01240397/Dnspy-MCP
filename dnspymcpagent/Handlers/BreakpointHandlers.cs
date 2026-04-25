@@ -256,9 +256,9 @@ public static class BreakpointHandlers
     /// already owns that scope).
     ///
     /// Supported kinds (the same handlers exposed via bp.set_*):
-    ///   {kind:"by_name", modulePath, typeFullName, methodName, overloadIndex?}
-    ///   {kind:"il",      modulePath, token, offset?}
-    ///   {kind:"native",  address, modulePath?, token?}
+    ///   {kind:"by_name", modulePath, typeFullName, methodName, overloadIndex?, condition?}
+    ///   {kind:"il",      modulePath, token, offset?, condition?}
+    ///   {kind:"native",  address, modulePath?, token? (no condition support — different cb sig)}
     /// </summary>
     public static object SetBreakpointFromSpec(JObject spec)
     {
@@ -280,6 +280,7 @@ public static class BreakpointHandlers
         var typeFullName = p["typeFullName"]?.Value<string>() ?? throw new ArgumentException("by_name missing typeFullName");
         var methodName = p["methodName"]?.Value<string>() ?? throw new ArgumentException("by_name missing methodName");
         var overloadIndex = p["overloadIndex"]?.Value<int>() ?? 0;
+        var condition = p["condition"]?.Value<string>();
 
         var mod = FindModule(modulePath) ?? throw new ArgumentException($"module not found: {modulePath}");
         var mdi = mod.CorModule.GetMetaDataInterface<dndbg.COM.MetaData.IMetaDataImport>()
@@ -289,9 +290,13 @@ public static class BreakpointHandlers
         var methodToken = MetaDataUtils.FindMethodByName(mdi, typeToken, methodName, overloadIndex);
         if (methodToken == 0) throw new ArgumentException($"method not found: {typeFullName}::{methodName} (overload {overloadIndex})");
 
-        var bp = Program.Session.DnDebugger.CreateBreakpoint(mod.DnModuleId, methodToken, 0, null);
+        var entryRef = new BreakpointEntryRef();
+        var cond = BuildCountCondition(condition, entryRef);
+        var bp = Program.Session.DnDebugger.CreateBreakpoint(mod.DnModuleId, methodToken, 0, cond);
         var entry = Program.Session.Breakpoints.Add("by_name",
             $"{typeFullName}::{methodName} [token=0x{methodToken:X8}]", bp);
+        entry.Condition = condition;
+        entryRef.Entry = entry;
         return Describe(entry);
     }
 
@@ -300,11 +305,16 @@ public static class BreakpointHandlers
         var modulePath = p["modulePath"]?.Value<string>() ?? throw new ArgumentException("il missing modulePath");
         var token = p["token"]?.Value<uint>() ?? throw new ArgumentException("il missing token");
         var offset = p["offset"]?.Value<uint>() ?? 0;
+        var condition = p["condition"]?.Value<string>();
 
         var mod = FindModule(modulePath) ?? throw new ArgumentException($"module not found: {modulePath}");
-        var bp = Program.Session.DnDebugger.CreateBreakpoint(mod.DnModuleId, token, offset, null);
+        var entryRef = new BreakpointEntryRef();
+        var cond = BuildCountCondition(condition, entryRef);
+        var bp = Program.Session.DnDebugger.CreateBreakpoint(mod.DnModuleId, token, offset, cond);
         var entry = Program.Session.Breakpoints.Add("il",
             $"IL bp {Path.GetFileName(mod.Name)}!0x{token:X8}+{offset}", bp);
+        entry.Condition = condition;
+        entryRef.Entry = entry;
         return Describe(entry);
     }
 
@@ -315,6 +325,10 @@ public static class BreakpointHandlers
         var token = p["token"]?.Value<uint>() ?? 0;
         if (modulePath == null || token == 0)
             throw new ArgumentException("native bp currently requires (modulePath, token, address)");
+        // Native bp condition callback uses NativeCodeBreakpointConditionContext,
+        // not ILCodeBreakpointConditionContext — different signature, so we skip
+        // condition support for native bps until a generic dispatcher exists.
+        // (Conditions are rarely useful for native code anyway.)
         var mod = FindModule(modulePath) ?? throw new ArgumentException($"module not found: {modulePath}");
         var bp = Program.Session.DnDebugger.CreateNativeBreakpoint(mod.DnModuleId, token, (uint)address, null);
         var entry = Program.Session.Breakpoints.Add("native",
