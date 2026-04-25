@@ -42,5 +42,18 @@ public sealed class BreakpointRegistry
     public bool TryGet(int id, out BreakpointEntry entry) => _map.TryGetValue(id, out entry!);
     public bool Remove(int id) => _map.Remove(id);
     public IEnumerable<BreakpointEntry> All => _map.Values;
-    public void Clear() => _map.Clear();
+
+    /// <summary>
+    /// Wipe every registered breakpoint AND reset the id counter back to 1.
+    /// Called from <see cref="DebuggerSession.Detach"/> so a subsequent attach
+    /// (to the same or a different PID) starts from a clean state — no
+    /// stale entries, no surprising "next BP got id=4 instead of id=1"
+    /// counter leak. <see cref="Remove(int)"/> intentionally does NOT
+    /// touch the counter so within-session ids stay monotonic.
+    /// </summary>
+    public void Clear()
+    {
+        _map.Clear();
+        _nextId = 1;
+    }
 }

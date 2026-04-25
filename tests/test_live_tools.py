@@ -367,6 +367,46 @@ def _debug_state(live_agent):
     return live_agent.call_json("debug_session_info").get("debugState") or {}
 
 
+def test_bp_id_counter_resets_after_detach(live_agent, testtarget_pid):
+    """Every debug session must start with a fresh BP id space — `_nextId`
+    is reset alongside the registry map in BreakpointRegistry.Clear() so
+    re-attach (to the same or a different PID) doesn't leak the counter
+    from the previous session. Within a session id stays monotonic
+    (Remove() does NOT reset)."""
+    # Clear any leftover BPs and force the counter forward by adding a few.
+    for old in _items(live_agent.call_json("debug_bp_list")):
+        live_agent.call_json("debug_bp_delete", {"id": old["id"]})
+    bp1 = live_agent.call_json("debug_bp_set_by_name", {
+        "modulePath": "dnspymcptest",
+        "typeFullName": "DnSpyMcp.TestTarget.Program",
+        "methodName": "Add",
+    })
+    bp2 = live_agent.call_json("debug_bp_set_by_name", {
+        "modulePath": "dnspymcptest",
+        "typeFullName": "DnSpyMcp.TestTarget.Program",
+        "methodName": "Multiply",
+    })
+    assert bp2["id"] > bp1["id"], "ids must be monotonic within a session"
+
+    # Cycle the debugger session.
+    live_agent.call_json("debug_pid_detach")
+    live_agent.call_json("debug_pid_attach", {"pid": testtarget_pid})
+
+    # Fresh session: id counter starts back at 1.
+    bp_fresh = live_agent.call_json("debug_bp_set_by_name", {
+        "modulePath": "dnspymcptest",
+        "typeFullName": "DnSpyMcp.TestTarget.Program",
+        "methodName": "Add",
+    })
+    assert bp_fresh["id"] == 1, \
+        f"counter not reset: got id={bp_fresh['id']} (expected 1)"
+
+    # bp.list shows only this one.
+    bps = _items(live_agent.call_json("debug_bp_list"))
+    assert len(bps) == 1 and bps[0]["id"] == 1
+    live_agent.call_json("debug_bp_delete", {"id": 1})
+
+
 def test_detach_attach_cycle(live_agent, testtarget_pid):
     """Detach then re-attach to the same PID. Post-cycle session must report
     attached with matching pid; lastExit info should show the detach."""
