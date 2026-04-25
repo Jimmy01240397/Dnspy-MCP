@@ -38,13 +38,10 @@ jobs:
 
       - name: Build everything via builder.ps1
         shell: pwsh
+        # builder.ps1 now builds dnspymcptest as part of the standard pipeline
+        # (so local pytest and CI pytest see identical fixture binaries) — no
+        # separate dotnet build step required.
         run: pwsh -File builder.ps1 -Configuration Release
-
-      - name: Build dnspymcptest (net48 fixture target)
-        shell: pwsh
-        run: |
-          dotnet build dnspymcptest/dnspymcptest.csproj -c Debug
-          if ($LASTEXITCODE -ne 0) { throw "dnspymcptest build failed" }
 
       - name: Run pytest
         shell: pwsh
