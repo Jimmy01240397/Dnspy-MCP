@@ -46,11 +46,27 @@ public sealed class AgentClient : IDisposable
                 _tcp.Connect(_host, _port);
                 _tcp.NoDelay = true;
                 var stream = _tcp.GetStream();
+                // Banner must arrive promptly — if the port is open but the listener
+                // isn't dnspymcpagent (e.g. typo'd port hits a different service),
+                // ReadLine would otherwise block forever. Cap at 5s for the banner read.
+                stream.ReadTimeout = 5000;
                 _reader = new StreamReader(stream, new UTF8Encoding(false));
                 _writer = new StreamWriter(stream, new UTF8Encoding(false)) { NewLine = "\n", AutoFlush = true };
-                var banner = _reader.ReadLine();
+                string? banner;
+                try
+                {
+                    banner = _reader.ReadLine();
+                }
+                catch (IOException ex) when (ex.InnerException is SocketException se && se.SocketErrorCode == SocketError.TimedOut)
+                {
+                    CloseLocked();
+                    throw new McpException($"agent at {_host}:{_port} did not send a banner within 5s — port likely belongs to a different service. Start dnspymcpagent.exe on the right port and retry.");
+                }
                 if (banner == null)
                     throw new McpException($"agent at {_host}:{_port} closed the connection without sending a banner (is dnspymcpagent actually running there?)");
+                // Restore infinite read timeout for ongoing RPC traffic — long-running
+                // ops (debug_step_over, debug_go) legitimately stall waiting for events.
+                stream.ReadTimeout = Timeout.Infinite;
 
                 if (_token != null)
                 {
