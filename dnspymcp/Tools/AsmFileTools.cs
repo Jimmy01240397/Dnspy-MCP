@@ -488,69 +488,19 @@ public static class AsmFileTools
     }
 
     [McpServerTool(Name = "reverse_xref_to_method")]
-    [Description("[REVERSE] Find all methods that call the given method using dnSpy's ScopedWhereUsedAnalyzer engine (cross-DLL, accessibility-aware: Private/Internal/Public scoping, TypeRef pre-filter, friend-assembly handling, type-equivalence). Scope: every currently-opened assembly. targetFullName accepts full signature ('System.Int32 Ns.Type::Method(System.Int32)') OR shorthand 'Ns.Type.Method' (matches any overload, AND any per-module instance — useful when the same DLL is opened from multiple paths). Response rows include the assembly each caller lives in. Paginated. Params: targetFullName (required), asmPath (optional — if given, only resolve the target method definition within this one asm; scope of caller search still spans all opened asms), offset=0, max=200.")]
+    [Description("[REVERSE] Find every member that calls the given method, using dnSpy's MethodUsedByNode + ScopedWhereUsedAnalyzer engine (cross-DLL, accessibility-aware: Private/Internal/Public scoping, TypeRef pre-filter, friend-assembly handling, type-equivalence, virtual-dispatch awareness). Scope: every currently-opened assembly. targetFullName accepts full signature ('System.Int32 Ns.Type::Method(System.Int32)') OR shorthand 'Ns.Type.Method' (matches any overload, AND any per-module instance when the same DLL is opened from multiple paths). Response rows include the assembly each caller lives in. Paginated. Params: targetFullName (required), asmPath (optional — if given, only resolve the target method definition within this one asm; scope of caller search still spans all opened asms), offset=0, max=200.")]
     public static object XrefToMethod(Workspace ws, string targetFullName, string? asmPath = null, int offset = 0, int max = 200)
     {
         if (string.IsNullOrEmpty(targetFullName))
             throw new McpException("targetFullName must be non-empty");
-
-        // Resolve EVERY MethodDef matching the input — shorthand may match
-        // multiple overloads (or multiple per-module instances of the same
-        // logical method when the same asm is opened twice). Each is fed to
-        // dnSpy's analyzer; we dedupe callers across analyses.
-        var targets = ResolveMethods(ws, targetFullName, asmPath).ToList();
-        if (targets.Count == 0)
-            throw new McpException($"method not found: {targetFullName}");
-
-        // Drive dnSpy's engine for each resolved target. The engine handles
-        // accessibility scoping / TypeRef pre-filtering / friend assemblies /
-        // parallel module traversal — we only supply the per-type callback.
-        var docService = new WorkspaceDocumentService(ws);
-        var hits = new List<object>();
-        var seen = new HashSet<MethodDef>(MethodDefComparer.Instance);
-        foreach (var targetMethod in targets)
-        {
-            var analyzer = new ScopedWhereUsedAnalyzer<(MethodDef caller, Instruction instr)>(
-                docService, targetMethod,
-                type => FindCallersInType(type, targetMethod));
-            foreach (var (caller, instr) in analyzer.PerformAnalysis(CancellationToken.None))
-            {
-                if (!seen.Add(caller)) continue;
-                var asmPathOut = caller.Module?.Location ?? "";
-                hits.Add(new { asm = asmPathOut, from = caller.FullName, ilOffset = instr.Offset, opCode = instr.OpCode.Name, target = targetMethod.FullName });
-            }
-        }
-        return Paging.Page(hits, offset, max);
-    }
-
-    // Per-type callback for ScopedWhereUsedAnalyzer: find call/callvirt/newobj
-    // to the target method. Uses dnSpy.Analyzer.Helpers + SigComparer-style
-    // logic, exposed via Publicizer. Not duplicated: every analyzer in dnSpy
-    // writes its own per-type callback (MethodUsedBy, TypeUsedBy, FieldAccess
-    // each have different ones) because THIS is the per-query part.
-    private static IEnumerable<(MethodDef caller, Instruction instr)> FindCallersInType(TypeDef type, MethodDef target)
-    {
-        string targetName = target.Name;
-        foreach (var method in type.Methods)
-        {
-            if (!method.HasBody) continue;
-            foreach (var instr in method.Body.Instructions)
-            {
-                if (instr.Operand is dnlib.DotNet.IMethod mr && !mr.IsField && mr.Name == targetName &&
-                    Helpers.IsReferencedBy(target.DeclaringType, mr.DeclaringType) &&
-                    AreSameMethod(mr.ResolveMethodDef(), target))
-                {
-                    yield return (method, instr);
-                    break;  // one hit per caller is enough
-                }
-            }
-        }
-    }
-
-    private static bool AreSameMethod(MethodDef? a, MethodDef? b)
-    {
-        if (a is null || b is null) return false;
-        return a == b || new SigComparer().Equals(a, b);
+        // Each resolved MethodDef is run through MethodUsedByNode separately;
+        // RunAnalyzer dedupes callers across every node by IMemberRef.
+        // isSetter=false because the analyzer uses that flag only for
+        // property/event accessor disambiguation — irrelevant for plain
+        // method targets.
+        return RunAnalyzer(ws, ResolveMethods(ws, targetFullName, asmPath),
+            $"method not found: {targetFullName}",
+            m => new[] { (SearchNode)new MethodUsedByNode(m, isSetter: false) }, offset, max);
     }
 
     // Look up methods matching either a full signature ('T Ns.Type::M(args)')
@@ -595,12 +545,6 @@ public static class AsmFileTools
         }
     }
 
-    private sealed class MethodDefComparer : IEqualityComparer<MethodDef>
-    {
-        public static readonly MethodDefComparer Instance = new();
-        public bool Equals(MethodDef? x, MethodDef? y) => ReferenceEquals(x, y);
-        public int GetHashCode(MethodDef obj) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
-    }
 
     // ---- shared helpers for analyzer-node tools (Phase 5+) -----------------
 

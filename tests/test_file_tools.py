@@ -236,7 +236,8 @@ def test_reverse_xref_to_method_shorthand(mcp, asm):
                       {"asmPath": asm,
                        "targetFullName": "DnSpyMcp.TestTarget.Program.Add"})
     assert r["returned"] >= 1
-    assert any("Compute" in x["from"] for x in r["items"])
+    refs = " ".join((x.get("memberFullName") or "") for x in r["items"])
+    assert "Compute" in refs, f"Compute missing from Add callers: {refs}"
 
 
 def test_reverse_xref_to_method_full_signature(mcp, asm):
