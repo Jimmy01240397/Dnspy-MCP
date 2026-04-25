@@ -89,6 +89,29 @@ def test_reverse_decompile_type_truncation(mcp, asm):
     assert "truncated" in r["hint"]
 
 
+def test_reverse_list_methods_nested_type_separator(mcp, asm):
+    """Nested type lookup must handle BOTH the reflection-style `+` separator
+    (e.g. 'OuterContainer+InnerNested', what dnlib's FindReflection accepts)
+    AND the FullName-style `/` separator (what GetTypes() returns) — the
+    second path proves the dnlib-iteration fallback in ResolveTypeOrThrow
+    runs cleanly when FindReflection misses or the caller uses the wrong
+    separator. Same code path that fixes the SP19725 SPSite lookup miss.
+    """
+    r_plus = mcp.call_json("reverse_list_methods", {
+        "asmPath": asm,
+        "typeFullName": "DnSpyMcp.TestTarget.OuterContainer+InnerNested",
+    })
+    r_slash = mcp.call_json("reverse_list_methods", {
+        "asmPath": asm,
+        "typeFullName": "DnSpyMcp.TestTarget.OuterContainer/InnerNested",
+    })
+    assert r_plus["total"] == r_slash["total"] >= 1
+    names_plus = {row["name"] for row in r_plus["items"]}
+    names_slash = {row["name"] for row in r_slash["items"]}
+    assert "Echo" in names_plus and "Echo" in names_slash, \
+        f"Echo missing: plus={names_plus} slash={names_slash}"
+
+
 def test_reverse_decompile_method(mcp, asm):
     r = mcp.call_json("reverse_decompile_method",
                       {"asmPath": asm,

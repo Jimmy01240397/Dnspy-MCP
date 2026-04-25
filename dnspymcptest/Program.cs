@@ -75,6 +75,17 @@ internal static class Program
     }
 }
 
+// Top-level + nested type pair used by reverse_list_methods nested-type
+// regression test (verifies the FindReflection fallback handles `+` ↔ `/`
+// nested-type separator both ways).
+public sealed class OuterContainer
+{
+    public sealed class InnerNested
+    {
+        public int Echo(int x) => x;
+    }
+}
+
 // Tiny inheritance hierarchy used by the reverse_subtypes / *_overrides /
 // *_overridden_by_base tests. Not exercised at runtime — exists purely so
 // the metadata has a virtual base + override pair to query.

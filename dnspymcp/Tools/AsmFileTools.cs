@@ -82,7 +82,7 @@ public static class AsmFileTools
     public static object ListMethods(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 100)
     {
         var a = ws.Get(asmPath);
-        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var t = ResolveTypeOrThrow(a, typeFullName);
         var rows = t.Methods.Select(m => new {
             name = m.Name.String,
             fullName = m.FullName,
@@ -144,12 +144,45 @@ public static class AsmFileTools
 
     // ---- Phase 6a: type member listing -----------------------------------
 
+    /// <summary>
+    /// Resolve a type by full name on an opened module. Both code paths use
+    /// dnlib (which is also what dnSpy's analyzer/decompiler uses internally).
+    ///
+    /// dnlib exposes <c>ModuleDef.FindReflection(string)</c> as the canonical
+    /// reflection-style lookup, but it silently misses a handful of real
+    /// types — confirmed in SP 19725 against
+    /// <c>Microsoft.SharePoint.SPSite</c>: <c>FindReflection</c> returns null
+    /// while <c>reverse_xref_to_type</c> (which iterates <c>GetTypes()</c>)
+    /// reports 3917 references to that exact type. The fallback iterates
+    /// <c>Module.GetTypes()</c> and matches FullName, normalising the
+    /// nested-type separator both ways (<c>+</c> reflection style vs
+    /// <c>/</c> dnlib FullName style) so callers can spell nested types
+    /// whichever way they prefer.
+    ///
+    /// We don't delegate to dnSpy.Analyzer because none of its accessible
+    /// helpers (Helpers.IsReferencedBy / GetOriginalCodeLocation / the
+    /// FilterSearcher live in the WPF main project) does "find type by
+    /// name", so a dnlib-only fallback is the lowest-friction fix.
+    /// </summary>
+    internal static TypeDef ResolveTypeOrThrow(Workspace.OpenedAsm a, string typeFullName)
+    {
+        var t = a.Module.FindReflection(typeFullName);
+        if (t != null) return t;
+        var alt = typeFullName.Replace('+', '/');
+        foreach (var td in a.Module.GetTypes())
+        {
+            if (td.FullName == typeFullName || td.FullName == alt)
+                return td;
+        }
+        throw new McpException($"type not found: {typeFullName}");
+    }
+
     [McpServerTool(Name = "reverse_list_fields")]
     [Description("[REVERSE] List every field declared on a type. Params: typeFullName, asmPath (optional), offset=0, max=200. Rows: {name, fullName, type, attributes, token, isStatic, isReadonly}.")]
     public static object ListFields(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 200)
     {
         var a = ws.Get(asmPath);
-        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var t = ResolveTypeOrThrow(a, typeFullName);
         var rows = t.Fields.Select(f => new
         {
             name = f.Name.String,
@@ -168,7 +201,7 @@ public static class AsmFileTools
     public static object ListProperties(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 200)
     {
         var a = ws.Get(asmPath);
-        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var t = ResolveTypeOrThrow(a, typeFullName);
         var rows = t.Properties.Select(p => new
         {
             name = p.Name.String,
@@ -187,7 +220,7 @@ public static class AsmFileTools
     public static object ListEvents(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 200)
     {
         var a = ws.Get(asmPath);
-        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var t = ResolveTypeOrThrow(a, typeFullName);
         var rows = t.Events.Select(e => new
         {
             name = e.Name.String,
@@ -207,7 +240,7 @@ public static class AsmFileTools
     public static object ListNestedTypes(Workspace ws, string typeFullName, string? asmPath = null, int offset = 0, int max = 200)
     {
         var a = ws.Get(asmPath);
-        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var t = ResolveTypeOrThrow(a, typeFullName);
         var rows = t.NestedTypes.Select(n => new
         {
             name = n.Name.String,
@@ -225,7 +258,7 @@ public static class AsmFileTools
     public static object TypeInfo(Workspace ws, string typeFullName, string? asmPath = null)
     {
         var a = ws.Get(asmPath);
-        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var t = ResolveTypeOrThrow(a, typeFullName);
         return new
         {
             fullName = t.FullName,
@@ -278,7 +311,7 @@ public static class AsmFileTools
     public static object DecompileProperty(Workspace ws, string typeFullName, string name, string? asmPath = null, int offsetChars = 0, int maxChars = 64_000)
     {
         var a = ws.Get(asmPath);
-        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var t = ResolveTypeOrThrow(a, typeFullName);
         var p = t.Properties.FirstOrDefault(x => x.Name == name) ?? throw new McpException($"property not found: {typeFullName}::{name}");
         var handle = MetadataTokens.PropertyDefinitionHandle((int)p.MDToken.Rid);
         var full = a.Decompiler.DecompileAsString(handle);
@@ -290,7 +323,7 @@ public static class AsmFileTools
     public static object DecompileEvent(Workspace ws, string typeFullName, string name, string? asmPath = null, int offsetChars = 0, int maxChars = 64_000)
     {
         var a = ws.Get(asmPath);
-        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var t = ResolveTypeOrThrow(a, typeFullName);
         var e = t.Events.FirstOrDefault(x => x.Name == name) ?? throw new McpException($"event not found: {typeFullName}::{name}");
         var handle = MetadataTokens.EventDefinitionHandle((int)e.MDToken.Rid);
         var full = a.Decompiler.DecompileAsString(handle);
@@ -302,7 +335,7 @@ public static class AsmFileTools
     public static object DecompileField(Workspace ws, string typeFullName, string name, string? asmPath = null, int offsetChars = 0, int maxChars = 32_000)
     {
         var a = ws.Get(asmPath);
-        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var t = ResolveTypeOrThrow(a, typeFullName);
         var f = t.Fields.FirstOrDefault(x => x.Name == name) ?? throw new McpException($"field not found: {typeFullName}::{name}");
         var handle = MetadataTokens.FieldDefinitionHandle((int)f.MDToken.Rid);
         var full = a.Decompiler.DecompileAsString(handle);
@@ -328,7 +361,7 @@ public static class AsmFileTools
                                        string? asmPath = null, int offset = 0, int max = 200)
     {
         var a = ws.Get(asmPath);
-        var t = a.Module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        var t = ResolveTypeOrThrow(a, typeFullName);
         var overloads = t.Methods.Where(mm => mm.Name == methodName).ToList();
         if (overloads.Count == 0) throw new McpException($"method not found: {typeFullName}::{methodName}");
         var rows = overloads.Select((m, i) => new
@@ -352,7 +385,18 @@ public static class AsmFileTools
     private static MethodDef ResolveOverload(ModuleDef module, string typeFullName, string methodName,
                                              string? signature, int? overloadIndex)
     {
-        var t = module.FindReflection(typeFullName) ?? throw new McpException($"type not found: {typeFullName}");
+        // Same fallback as ResolveTypeOrThrow but standalone since this
+        // helper takes a raw ModuleDef (not an OpenedAsm). Tries dnlib
+        // FindReflection first, then iterates GetTypes() with FullName
+        // separator normalisation.
+        var t = module.FindReflection(typeFullName);
+        if (t == null)
+        {
+            var alt = typeFullName.Replace('+', '/');
+            foreach (var td in module.GetTypes())
+                if (td.FullName == typeFullName || td.FullName == alt) { t = td; break; }
+        }
+        if (t == null) throw new McpException($"type not found: {typeFullName}");
         var overloads = t.Methods.Where(m => m.Name == methodName).ToList();
         if (overloads.Count == 0)
             throw new McpException($"method not found: {typeFullName}::{methodName}");
